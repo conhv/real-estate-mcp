@@ -1,0 +1,53 @@
+"""Shared test fixtures.
+
+Two kinds of tests live here:
+  - NO-DB tests (test_shaping, test_server_tools): run instantly, no Supabase needed. Start here.
+  - LIVE-DB tests (test_live_db): skipped automatically unless SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
+    are set in the environment/.env. These prove the tools actually query the real database.
+
+Real sample ids below were pulled from the live DB on 2026-07-31. If a test fails because an id is
+gone, re-introspect (Supabase MCP) and update these.
+"""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+
+def _has_db_creds() -> bool:
+    return bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY"))
+
+
+# Skip marker applied to every live-DB test. Usage: @needs_db above the test.
+needs_db = pytest.mark.skipif(
+    not _has_db_creds(),
+    reason="Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (e.g. in .env) to run live-DB tests.",
+)
+
+
+# --- Real sample ids for live-DB tests (verified 2026-07-31) ---
+@pytest.fixture(scope="session")
+def sample_project_id() -> str:
+    """A project that definitely has many listings."""
+    return "vhm:vinhomes-ocean-park"  # 524 listings, Hà Nội
+
+
+@pytest.fixture(scope="session")
+def sample_project_name() -> str:
+    return "Vinhomes"  # matches several Vinhomes projects
+
+
+@pytest.fixture(scope="session")
+def sample_listing_ids() -> list[str]:
+    """Real listing ids in the sample project (for get_listing / compare_listings)."""
+    return ["oh:TOFMRB", "oh:JWJ33B", "oh:FUAPLB"]
+
+
+@pytest.fixture(scope="session")
+def mcp_server():
+    """The shared FastMCP server instance."""
+    from app.server import mcp
+
+    return mcp
