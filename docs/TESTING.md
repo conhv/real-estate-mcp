@@ -43,8 +43,11 @@ Decision tree:
 import asyncio
 from app.server import mcp
 res = asyncio.run(mcp.call_tool("search_listings", {"project_id": "vhm:vinhomes-ocean-park", "limit": 3}))
-print(res.data)   # the tool's return value
+print(res.structured_content)   # FastMCP 3.x: NOT `.data`
 ```
+`ToolResult` has `content`, `structured_content`, `meta`, `is_error`. Tools that return a list are
+wrapped as `{"result": [...]}`; tools that return a dict come through as-is. The tests use the
+`tool_data()` helper in `conftest.py` to hide that difference.
 
 ## Windows note
 If you see `UnicodeEncodeError` printing Vietnamese in the console, prefix with `PYTHONUTF8=1` (the
