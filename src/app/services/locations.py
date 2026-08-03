@@ -40,6 +40,15 @@ def _fold_accents(value: str) -> str:
     return "".join(c for c in decomposed if unicodedata.category(c) != "Mn").lower()
 
 
+def is_same_name(a: str, b: str) -> bool:
+    """Compare two place names ignoring case, accents and repeated whitespace.
+
+    Used to tell "the user typed this project's full name" apart from "the user typed something
+    that merely matches it", which fuzzy search alone cannot distinguish.
+    """
+    return " ".join(_fold_accents(a).split()) == " ".join(_fold_accents(b).split())
+
+
 def search_projects(query: str | None, province: str | None, limit: int) -> list[dict]:
     """Search project nodes by name and/or province, best match first.
 
@@ -86,25 +95,48 @@ def get_location(location_id: str) -> dict | None:
     return shape_location(rows[0]) if rows else None
 
 
-def list_children(parent_id: str, level: str | None, limit: int) -> list[dict]:
-    """List child nodes (clusters/buildings) of a project or cluster, sorted by name."""
-    q = get_client().table("locations").select(LOCATION_COLUMNS).eq("parent_id", parent_id)
+def list_project_nodes(project_id: str, level: str | None, limit: int) -> list[dict]:
+    """List every cluster/building under a project, clusters first then buildings, by name.
+
+    Matches on `project_id`, not `parent_id`: a project's direct children are clusters whenever
+    that project has a cluster layer (23 of 57 do), so walking one level down hides the
+    buildings entirely — Vinhomes Ocean Park has 13 direct children but 53 buildings. Every
+    cluster and building row carries `project_id`, and it always equals the root of its parent
+    chain, so this returns the whole subtree in one query.
+
+    Callers that want a single layer pass `level`. Note some projects have clusters but no
+    building rows at all, so `level="building"` can legitimately come back empty.
+    """
+    q = get_client().table("locations").select(LOCATION_COLUMNS).eq("project_id", project_id)
     if level:
         q = q.eq("level", level)
-    rows = q.order("name").limit(limit).execute().data or []
+    # 'cluster' > 'building' alphabetically, so desc puts parents before their children.
+    rows = q.order("level", desc=True).order("name").limit(limit).execute().data or []
     return [shape_location(r) for r in rows]
 
 
 def list_provinces() -> list[str]:
-    """Distinct provinces that have at least one project node."""
+    """Distinct provinces holding at least one project, in Vietnamese alphabetical order.
+
+    Sorting keys on the accent-folded name. Python's plain `sorted()` compares Unicode
+    codepoints, which puts 'Hưng Yên' (ư = U+01B0) ahead of 'Hải Phòng' (ả = U+1EA3) and
+    'Hồ Chí Minh' (ồ = U+1ED3) — visibly wrong to a Vietnamese reader. Folding collapses ă/â
+    into a and đ into d, so this is not a full Vietnamese collation (which sorts them as
+    separate letters), but it orders real province names correctly. The unfolded name breaks
+    ties so the result stays deterministic.
+
+    9 of the 57 projects have no province recorded; they are simply absent from this list.
+    """
     rows = (
         get_client()
         .table("locations")
         .select("province")
         .eq("level", "project")
+        .not_.is_("province", "null")
+        .limit(1000)  # explicit: PostgREST silently caps at 1000 rows otherwise
         .execute()
         .data
         or []
     )
-    provinces = {r["province"] for r in rows if r.get("province")}
-    return sorted(provinces)
+    provinces = {p for r in rows if (p := (r.get("province") or "").strip())}
+    return sorted(provinces, key=lambda p: (_fold_accents(p), p))

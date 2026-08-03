@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from ..services import locations as svc
 
@@ -42,26 +43,71 @@ def register(mcp: FastMCP) -> None:
         """Decide whether a user's free text refers to a known project, for slot-filling.
 
         Use to check if what the user typed/clicked is actually a project name before proceeding.
-        Returns {"matched": bool, "project": {...}|None, "candidates": [...]}.
-        - Exactly one strong match -> matched=true with that project.
-        - Several possible -> matched=false with candidates to disambiguate (ask the user).
-        - None -> matched=false, empty candidates (treat as not a project name).
+        Returns {"matched": bool, "project": {...}|None, "candidates": [...]}:
+        - Resolved -> matched=true, `project` set, `candidates` empty. Proceed with that project.
+        - Ambiguous -> matched=false, `candidates` listed. Ask the user to pick one; do not guess.
+        - Not a project -> matched=false, `candidates` empty. Treat the text as something else.
+
+        Resolves when the text is one project's full name (ignoring case and accents), or when
+        the fuzzy search finds exactly one project. So "Vinhomes Ocean Park" resolves even though
+        "Vinhomes Ocean Park 2" and "3" also match, while a bare "Vinhomes" stays ambiguous.
         """
         candidates = svc.search_projects(query=text, province=None, limit=5)
+        exact = [c for c in candidates if svc.is_same_name(c["name"], text)]
+        # An exact name beats mere prefix matches; without this, typing a project's full name
+        # stays "ambiguous" whenever a longer sibling ("... 2") exists.
+        if len(exact) == 1:
+            return {"matched": True, "project": exact[0], "candidates": []}
         if len(candidates) == 1:
             return {"matched": True, "project": candidates[0], "candidates": []}
         return {"matched": False, "project": None, "candidates": candidates}
 
     @mcp.tool
-    def list_project_buildings(project_id: str, limit: int = 50) -> list[dict]:
-        """List the buildings/clusters that belong to a project.
+    def list_project_buildings(
+        project_id: str,
+        level: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """List the buildings and clusters (phân khu) inside a project.
 
-        Use after a project is chosen, to let the user narrow to a specific tower/building.
-        Args: project_id like "oh:amber-riverside". Returns child location nodes.
+        Use after a project is chosen, to show the user how it is laid out and let them ask
+        about a specific tower or subdivision by name.
+
+        Returns location nodes sorted clusters-first then by name, each {id, level, name,
+        province, district, parent_id, project_id, lat, lng}. `level` is "cluster" (a
+        subdivision) or "building" (a tower); `parent_id` says which cluster a building sits
+        under, so you can present them grouped. Big projects mix both layers — Vinhomes Ocean
+        Park has 13 clusters and 53 buildings. An empty list means the project is not broken
+        down further, which is normal for small projects; it is not an error. Raises if
+        `project_id` is not a real project.
+
+        Args:
+            project_id: a project id from search_projects / resolve_project,
+                e.g. "oh:amber-riverside". Not a cluster or building id.
+            level: keep only one layer — "cluster" or "building". Omit for both. Some projects
+                have clusters but no building rows, so "building" may return nothing.
+            limit: max nodes to return (default 50).
         """
-        return svc.list_children(parent_id=project_id, level=None, limit=limit)
+        project = svc.get_location(project_id)
+        if project is None or project.get("level") != "project":
+            raise ToolError(f"'{project_id}' is not a known project id.")
+        if level not in (None, "cluster", "building"):
+            raise ToolError(f"level must be 'cluster' or 'building', got '{level}'.")
+        return svc.list_project_nodes(project_id=project_id, level=level, limit=limit)
 
     @mcp.tool
     def list_provinces() -> list[str]:
-        """List provinces that have at least one project. Use to offer location choices to the user."""
+        """List the provinces that have at least one project, to offer the user location choices.
+
+        Use when the user asks where projects are available, or to turn a vague "tìm chung cư"
+        into a concrete location question.
+
+        Returns a de-duplicated list of province name strings in Vietnamese alphabetical order,
+        e.g. ["Hà Nội", "Hải Phòng", "Hồ Chí Minh", "Hưng Yên", "Long An"]. Pass one back
+        verbatim as `province` to search_projects, which expects the accented spelling.
+
+        Some projects have no province recorded, so this list does not cover the whole
+        catalogue — search_projects without a province still searches everything. Never tell
+        the user these are the only places we have projects.
+        """
         return svc.list_provinces()
