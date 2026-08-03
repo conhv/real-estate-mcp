@@ -20,13 +20,20 @@ def register(mcp: FastMCP) -> None:
         projects in a place ("chung cư ở Hà Nội"). This is the entry point for US1 and for the
         "clarify which project" step in booking/consulting/policy flows.
 
+        Returns a list of project nodes sorted by name, each {id, level, name, province, district,
+        parent_id, project_id, lat, lng}. On project rows parent_id/project_id are always null,
+        and province/lat/lng are null for a few projects. An empty list means no project matched,
+        not that the search failed. Show up to 3 as quick-pick buttons; if more, offer
+        "xem tất cả".
+
+        Name matching is forgiving: it ignores accents ("chung cu" finds "Chung cư 25 Lạc
+        Trung") and tolerates typos ("vinhoms" finds "Vinhomes ..."), and results come back
+        best-match-first. `province` is stricter — pass it accented ("Hà Nội", not "ha noi").
+
         Args:
             query: free-text project name fragment (Vietnamese ok), e.g. "vinhomes". Optional.
-            province: province filter, e.g. "Hà Nội". Optional.
+            province: province filter, accented, e.g. "Hà Nội". Optional.
             limit: max projects to return (default 10).
-
-        Returns: list of project nodes, each {id, level, name, province, district, lat, lng}.
-        Show up to 3 as quick-pick buttons; if more, offer "xem tất cả".
         """
         return svc.search_projects(query=query, province=province, limit=limit)
 

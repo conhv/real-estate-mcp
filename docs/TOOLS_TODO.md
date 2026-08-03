@@ -34,10 +34,15 @@ Các id mẫu hợp lệ để test nằm trong `tests/conftest.py`.
 ## Giai đoạn 1 — đã triển khai; hãy kiểm chứng & làm chắc thêm
 
 ### US1 — Tìm kiếm theo project / tỉnh thành
-- [ ] **`search_projects(query, province, limit)`** → danh sách node project.
-  - Kiểm chứng: trả về 1–3 kết quả với tên rõ ràng, và nhiều kết quả với tên một phần (vd "chung cu").
-  - Làm chắc thêm: đổi `ilike` → `pg_trgm similarity` + `unaccent` để "vinhome"/"Vinhomes" và truy
-    vấn không dấu đều khớp. (các extension đã có sẵn; xem SCHEMA.md)
+- [x] **`search_projects(query, province, limit)`** → danh sách node project.
+  - ✅ Kiểm chứng: "Amber Riverside" → 1 kết quả; "Vinhomes" → 22; "chung cu" → 2 (trước đây là 0).
+  - ✅ Làm chắc thêm: khớp 3 tầng qua RPC `search_projects_fuzzy` — `ILIKE name` (có dấu) →
+    `ILIKE name_norm` (không dấu, cột DB đã lưu sẵn dạng bỏ dấu nên **không cần** `unaccent`) →
+    `word_similarity >= 0.55` (chịu lỗi gõ: "vinhoms" → Vinhomes). Kết quả xếp theo điểm trigram.
+    Migration: `migrations/001_search_projects_fuzzy.sql` — **phải chạy trước khi deploy**, nếu
+    không sẽ lỗi `Could not find the function public.search_projects_fuzzy`.
+  - Test: 7 test trong `tests/test_live_db.py` (không dấu, lỗi gõ, chặn truy vấn rác, xếp hạng,
+    lọc tỉnh trong SQL, thứ tự xác định, ký tự đặc biệt).
 - [ ] **`resolve_project(text)`** → `{matched, project, candidates}`.
   - Khớp đúng một → `matched=true`; khớp nhiều → `matched=false` + candidates; không khớp → rỗng.
 - [ ] **`list_project_buildings(project_id, limit)`** → các node location con.
