@@ -11,6 +11,7 @@ from ..services import listings as svc
 PROPERTY_TYPES = (
     "can_ho",  # apartment (dominant)
     "lien_ke",  # townhouse
+    "nha_pho",  # street house
     "shophouse",
     "thuong_mai_dich_vu",  # commercial/service
     "biet_thu_don_lap",  # detached villa

@@ -6,18 +6,19 @@ Run them once you've put credentials in .env:
 These call the real tools end-to-end through the MCP server, proving your service/db layer works
 against the actual Supabase data. They use the real sample ids from conftest.py.
 
-`mcp.call_tool(name, args)` returns a ToolResult; `.data` holds the tool's return value.
+`mcp.call_tool(name, args)` returns a ToolResult; use `tool_data(res)` from conftest to read the
+tool's return value out of it (see that helper for why `.structured_content` needs unwrapping).
 """
 
 from __future__ import annotations
 
-from .conftest import needs_db
+from .conftest import needs_db, tool_data
 
 
 @needs_db
 async def test_search_projects_finds_vinhomes(mcp_server, sample_project_name):
     res = await mcp_server.call_tool("search_projects", {"query": sample_project_name})
-    projects = res.data
+    projects = tool_data(res)
     assert isinstance(projects, list) and projects, "expected at least one Vinhomes project"
     assert all(p["level"] == "project" for p in projects)
 
@@ -25,7 +26,7 @@ async def test_search_projects_finds_vinhomes(mcp_server, sample_project_name):
 @needs_db
 async def test_resolve_project(mcp_server, sample_project_name):
     res = await mcp_server.call_tool("resolve_project", {"text": sample_project_name})
-    out = res.data
+    out = tool_data(res)
     assert set(out) == {"matched", "project", "candidates"}
 
 
@@ -34,7 +35,7 @@ async def test_search_listings_in_project(mcp_server, sample_project_id):
     res = await mcp_server.call_tool(
         "search_listings", {"project_id": sample_project_id, "limit": 5}
     )
-    cards = res.data
+    cards = tool_data(res)
     assert isinstance(cards, list) and cards
     assert len(cards) <= 5
     # types were coerced by shaping (price is int, area is float-or-none)
@@ -44,7 +45,7 @@ async def test_search_listings_in_project(mcp_server, sample_project_id):
 @needs_db
 async def test_get_listing_detail(mcp_server, sample_listing_ids):
     res = await mcp_server.call_tool("get_listing", {"listing_id": sample_listing_ids[0]})
-    listing = res.data
+    listing = tool_data(res)
     assert listing["id"] == sample_listing_ids[0]
     assert "images" in listing  # detail view
 
@@ -54,7 +55,7 @@ async def test_compare_listings(mcp_server, sample_listing_ids):
     res = await mcp_server.call_tool(
         "compare_listings", {"listing_ids": sample_listing_ids[:2]}
     )
-    out = res.data
+    out = tool_data(res)
     assert len(out["listings"]) == 2
     assert "fields" in out
 
@@ -62,7 +63,7 @@ async def test_compare_listings(mcp_server, sample_listing_ids):
 @needs_db
 async def test_project_overview_stats(mcp_server, sample_project_id):
     res = await mcp_server.call_tool("project_overview", {"project_id": sample_project_id})
-    out = res.data
+    out = tool_data(res)
     assert out["project"]["id"] == sample_project_id
     assert out["stats"]["count"] > 0
     assert "price_vnd" in out["stats"]
@@ -73,19 +74,19 @@ async def test_map_listings_have_coords(mcp_server, sample_project_id):
     res = await mcp_server.call_tool(
         "map_listings", {"project_id": sample_project_id, "limit": 10}
     )
-    out = res.data
+    out = tool_data(res)
     assert out["count"] == len(out["points"])
     assert all(p["lat"] is not None and p["lng"] is not None for p in out["points"])
 
 
 @needs_db
 async def test_booking_form_authed_vs_guest(mcp_server, sample_project_id):
-    guest = (await mcp_server.call_tool(
+    guest = tool_data(await mcp_server.call_tool(
         "start_visit_booking", {"project_id": sample_project_id, "is_authenticated": False}
-    )).data
-    authed = (await mcp_server.call_tool(
+    ))
+    authed = tool_data(await mcp_server.call_tool(
         "start_visit_booking", {"project_id": sample_project_id, "is_authenticated": True}
-    )).data
+    ))
     guest_fields = {f["name"] for f in guest["fields"]}
     authed_fields = {f["name"] for f in authed["fields"]}
     assert "phone" in guest_fields  # guest must give contact
