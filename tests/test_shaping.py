@@ -17,6 +17,11 @@ class TestCoercion:
         assert shaping.to_float("  80 ") == 80.0
         assert shaping.to_float(90) == 90.0
 
+    def test_to_float_whole_floats_return_int(self):
+        assert shaping.to_float("43.0") == 43
+        assert isinstance(shaping.to_float("43.0"), int)
+        assert shaping.to_float("72.5") == 72.5
+
     def test_to_float_bad_values_are_none(self):
         assert shaping.to_float(None) is None
         assert shaping.to_float("") is None
@@ -34,11 +39,40 @@ class TestStatusNormalization:
 
     def test_mojibake_status_is_fixed(self):
         # the corrupted variant from the DB contains the replacement char
-        assert shaping.normalize_status("�ANG BÁN") == "ĐANG BÁN"
+        assert shaping.normalize_status("ANG BÁN") == "ĐANG BÁN"
 
     def test_empty_status_is_none(self):
         assert shaping.normalize_status(None) is None
         assert shaping.normalize_status("  ") is None
+
+
+class TestShapeListingDetail:
+    def test_shapes_full_detail_attributes(self):
+        raw = {
+            "id": "vhm:123",
+            "title": "Căn hộ 2PN+1",
+            "cluster_id": "vhm:the-origami",
+            "bedrooms": "2",
+            "bedrooms_plus": True,
+            "bathrooms": 2,
+            "floor_num": "12",
+            "floor_band": "tang_trung",
+            "direction_balcony": "Đông Nam",
+            "view": "View Công viên",
+            "legal_status": "Sổ hồng lâu dài",
+            "furnishing": "Full nội thất",
+            "usage_status": "Nhà trống bàn giao ngay",
+            "price_vnd": 3_500_000_000,
+            "area_m2": 63.5,
+        }
+        detail = shaping.shape_listing_detail(raw)
+        assert detail["cluster_id"] == "vhm:the-origami"
+        assert detail["bedrooms_plus"] is True
+        assert detail["floor_num"] == 12
+        assert detail["floor_band"] == "tang_trung"
+        assert detail["direction_balcony"] == "Đông Nam"
+        assert detail["view"] == "View Công viên"
+        assert detail["legal_status"] == "Sổ hồng lâu dài"
 
 
 class TestShapeListingCard:
@@ -75,3 +109,42 @@ class TestShapeLocation:
         assert out["level"] == "project"
         assert set(out) == {"id", "level", "name", "province", "district", "parent_id",
                             "project_id", "lat", "lng"}
+
+
+class TestComputeComparisonInsights:
+    def test_insights_calculation(self):
+        listings = [
+            {
+                "id": "item1",
+                "project_id": "proj:A",
+                "province": "Hà Nội",
+                "price_vnd": 3_000_000_000,
+                "price_per_m2_vnd": 50_000_000,
+                "area_m2": 60.0,
+                "bedrooms": 2,
+            },
+            {
+                "id": "item2",
+                "project_id": "proj:A",
+                "province": "Hà Nội",
+                "price_vnd": 4_000_000_000,
+                "price_per_m2_vnd": 40_000_000,
+                "area_m2": 100.0,
+                "bedrooms": 3,
+            },
+        ]
+        insights = shaping.compute_comparison_insights(listings)
+        ctx = insights["context"]
+        assert ctx["same_project"] is True
+        assert ctx["same_province"] is True
+        assert ctx["projects"] == ["proj:A"]
+
+        deltas = insights["deltas"]
+        assert deltas["price_vnd"]["diff"] == 1_000_000_000
+        assert deltas["area_m2"]["diff"] == 40.0
+
+        hl = insights["highlights"]
+        assert "cheapest_price" in hl["item1"]
+        assert "largest_area" in hl["item2"]
+        assert "lowest_price_per_m2" in hl["item2"]
+

@@ -30,7 +30,7 @@ def search_listings(
     limit: int,
 ) -> list[dict]:
     """Filtered listing search. SQL-side filters for the reliable columns; bedrooms in Python."""
-    q = get_client().table("listing").select(LISTING_CARD_COLUMNS)
+    q = get_client().table("listings").select(LISTING_CARD_COLUMNS)
     if project_id:
         q = q.eq("project_id", project_id)
     if property_type:
@@ -52,7 +52,7 @@ def search_listings(
 def get_listing(listing_id: str) -> dict | None:
     rows = (
         get_client()
-        .table("listing")
+        .table("listings")
         .select(LISTING_DETAIL_COLUMNS)
         .eq("id", listing_id)
         .limit(1)
@@ -65,7 +65,7 @@ def get_listing(listing_id: str) -> dict | None:
 def list_by_project(project_id: str, limit: int) -> list[dict]:
     rows = (
         get_client()
-        .table("listing")
+        .table("listings")
         .select(LISTING_CARD_COLUMNS)
         .eq("project_id", project_id)
         .order("price_vnd", desc=False)
@@ -78,17 +78,37 @@ def list_by_project(project_id: str, limit: int) -> list[dict]:
 
 
 def get_many(listing_ids: list[str]) -> list[dict]:
-    """Fetch several listings by id (used by compare)."""
+    """Fetch several listings by id (used by compare), attaching province for context evaluation."""
     rows = (
         get_client()
-        .table("listing")
+        .table("listings")
         .select(LISTING_DETAIL_COLUMNS)
         .in_("id", listing_ids)
+        .order("price_vnd", desc=False)
         .execute()
         .data
         or []
     )
-    return [shape_listing_detail(r) for r in rows]
+    shaped = [shape_listing_detail(r) for r in rows]
+    # Sort shaped listings by price_vnd ascending
+    shaped.sort(key=lambda x: (x.get("price_vnd") or 0))
+    project_ids = list({r["project_id"] for r in shaped if r.get("project_id")})
+    if project_ids:
+        loc_rows = (
+            get_client()
+            .table("locations")
+            .select("id,province")
+            .in_("id", project_ids)
+            .execute()
+            .data
+            or []
+        )
+        prov_map = {l["id"]: l.get("province") for l in loc_rows}
+        for item in shaped:
+            item["province"] = prov_map.get(item.get("project_id"))
+    return shaped
+
+
 
 
 def project_price_stats(project_id: str) -> dict:
@@ -99,7 +119,7 @@ def project_price_stats(project_id: str) -> dict:
     """
     rows = (
         get_client()
-        .table("listing")
+        .table("listings")
         .select("price_vnd,price_per_m2_vnd,area_m2,property_type,bedrooms")
         .eq("project_id", project_id)
         .execute()
@@ -139,7 +159,7 @@ def map_points(project_id: str | None, limit: int) -> list[dict]:
     """Lightweight lat/lng points for the map view (US5)."""
     q = (
         get_client()
-        .table("listing")
+        .table("listings")
         .select("id,title,property_type,price_vnd,lat,lng")
         .not_.is_("lat", "null")
         .not_.is_("lng", "null")
