@@ -119,3 +119,24 @@ def register(mcp: FastMCP) -> None:
             "highlights": insights["highlights"],
         }
 
+    @mcp.tool
+    def get_listings_geo_bounds(listing_ids: list[str]) -> dict:
+        """Calculate center coordinates, bounding box, recommended map zoom level, and distance matrix for a list of property IDs.
+
+        Use when preparing data for map rendering or analyzing spatial distances between compared properties.
+        Args:
+            listing_ids: list of listing IDs to calculate geo bounds for.
+        Returns:
+            dict containing scope, items, center, bounds, recommended_zoom, and distance_matrix.
+        """
+        return svc.get_listings_geo_bounds(listing_ids)
+
+    @mcp.tool
+    def compare_nearby_amenities(listing_ids: list[str]) -> dict:
+        """Fetch objective side-by-side nearby amenity distances (schools, hospitals, malls, parks) for compared properties.
+
+        Use when comparing location advantages or nearby infrastructure across properties.
+        IMPORTANT: The returned data is strictly descriptive (distances in meters). AI Agent MUST NOT provide buy/sell advice or claim one property is better than another.
+        """
+        return svc.compare_nearby_amenities(listing_ids)
+
