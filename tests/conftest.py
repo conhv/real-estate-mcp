@@ -37,7 +37,6 @@ def tool_data(result):
         return content["result"]
     return content
 
-
 # Skip marker applied to every live-DB test. Usage: @needs_db above the test.
 needs_db = pytest.mark.skipif(
     not _has_db_creds(),

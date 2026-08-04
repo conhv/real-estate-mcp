@@ -75,3 +75,40 @@ class TestShapeLocation:
         assert out["level"] == "project"
         assert set(out) == {"id", "level", "name", "province", "district", "parent_id",
                             "project_id", "lat", "lng"}
+
+
+class TestProjectPriceStats:
+    def test_stats_calculation(self):
+        from unittest.mock import MagicMock, patch
+        import app.services.listings as listing_svc
+
+        mock_rows = [
+            {
+                "price_vnd": 3_000_000_000,
+                "price_per_m2_vnd": 50_000_000,
+                "area_m2": "60.0",
+                "property_type": "can_ho",
+                "bedrooms": "2",
+            },
+            {
+                "price_vnd": 5_000_000_000,
+                "price_per_m2_vnd": 62_500_000,
+                "area_m2": "80.0",
+                "property_type": "can_ho",
+                "bedrooms": "3",
+            },
+        ]
+        with patch("app.services.listings.get_client") as mock_db:
+            mock_table = MagicMock()
+            mock_db.return_value.table.return_value = mock_table
+            mock_table.select.return_value.eq.return_value.execute.return_value.data = mock_rows
+
+            stats = listing_svc.project_price_stats("oh:amber-riverside")
+            assert stats["count"] == 2
+            assert stats["price_vnd"] == {"min": 3_000_000_000, "max": 5_000_000_000, "avg": 4_000_000_000}
+            assert stats["price_per_m2_vnd"] == {"min": 50_000_000, "max": 62_500_000, "avg": 56_250_000}
+            assert stats["area_m2"] == {"min": 60.0, "max": 80.0, "avg": 70.0}
+            assert stats["bedrooms_range"] == {"min": 2, "max": 3}
+            assert stats["by_property_type"] == {"can_ho": 2}
+
+

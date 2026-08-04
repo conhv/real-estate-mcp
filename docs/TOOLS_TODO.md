@@ -182,9 +182,12 @@ Các id mẫu hợp lệ để test nằm trong `tests/conftest.py`.
     là sẽ có chuyên viên liên hệ.
 
 ### US4 — Tổng quan project
-- [ ] **`project_overview(project_id)`** → `{project, stats}` gồm số lượng, giá/giá-trên-m2
-  min/max/trung bình, khoảng số phòng ngủ, tỷ trọng các loại hình. **Chỉ mang tính mô tả** — không
-  định giá/tư vấn.
+- [x] **`project_overview(project_id)`** → `{project, stats}` gồm số lượng, giá/giá-trên-m2 min/max/trung bình, khoảng diện tích & phòng ngủ, tỷ trọng các loại hình.
+  - ✅ Trả về thông tin địa điểm `project` kèm object `stats` tổng hợp: `count`, khoảng & trung bình `price_vnd`, `price_per_m2_vnd`, `area_m2`, `bedrooms_range`, và cơ cấu loại hình `by_property_type`.
+  - ✅ Docstring quy định rõ: **Chỉ mang tính mô tả** ("descriptive stats only") — không tự ý thẩm định giá hay đưa ra tư vấn đầu tư.
+  - ✅ Kiểm tra dữ liệu: Raise `ToolError` khi `project_id` không tồn tại hoặc không thuộc cấp project (`level != "project"`).
+  - ⚠️ Lưu ý hiệu năng (Phase 2): Hiện tại tính toán `min/max/avg` bằng Python trên dữ liệu kéo về. Đã có kế hoạch chuyển sang Postgres RPC (Stored Procedure) ở Phase 2 để tránh kéo toàn bộ dòng.
+  - Test: 1 test trong `tests/test_live_db.py` (`test_project_overview_stats`) và 1 unit test trong `tests/test_shaping.py` (`TestProjectPriceStats`).
 
 ### US5 — Bản đồ
 - [ ] **`map_listings(project_id, limit)`** → `{count, points:[{id,title,property_type,price_vnd,lat,lng}]}`.

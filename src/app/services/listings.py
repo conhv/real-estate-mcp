@@ -24,6 +24,7 @@ from ..shaping import (
     LISTING_DETAIL_COLUMNS,
     shape_listing_card,
     shape_listing_detail,
+    to_float,
     to_int,
 )
 
@@ -192,14 +193,15 @@ def project_price_stats(project_id: str) -> dict:
     )
     prices = [r["price_vnd"] for r in rows if r.get("price_vnd") is not None]
     ppm2 = [r["price_per_m2_vnd"] for r in rows if r.get("price_per_m2_vnd") is not None]
+    areas = [a for a in (to_float(r.get("area_m2")) for r in rows) if a is not None]
     beds = [b for b in (to_int(r.get("bedrooms")) for r in rows) if b is not None]
     ptypes: dict[str, int] = {}
     for r in rows:
         pt = r.get("property_type") or "unknown"
         ptypes[pt] = ptypes.get(pt, 0) + 1
 
-    def _avg(xs: list[int]) -> float | None:
-        return round(sum(xs) / len(xs)) if xs else None
+    def _avg(xs: list[int | float]) -> float | None:
+        return round(sum(xs) / len(xs), 2) if xs else None
 
     return {
         "project_id": project_id,
@@ -207,12 +209,17 @@ def project_price_stats(project_id: str) -> dict:
         "price_vnd": {
             "min": min(prices) if prices else None,
             "max": max(prices) if prices else None,
-            "avg": _avg(prices),
+            "avg": round(_avg(prices)) if prices and _avg(prices) is not None else None,
         },
         "price_per_m2_vnd": {
             "min": min(ppm2) if ppm2 else None,
             "max": max(ppm2) if ppm2 else None,
-            "avg": _avg(ppm2),
+            "avg": round(_avg(ppm2)) if ppm2 and _avg(ppm2) is not None else None,
+        },
+        "area_m2": {
+            "min": min(areas) if areas else None,
+            "max": max(areas) if areas else None,
+            "avg": _avg(areas),
         },
         "bedrooms_range": {"min": min(beds) if beds else None, "max": max(beds) if beds else None},
         "by_property_type": ptypes,
