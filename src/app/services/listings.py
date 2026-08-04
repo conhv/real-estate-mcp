@@ -30,7 +30,7 @@ def search_listings(
     limit: int,
 ) -> list[dict]:
     """Filtered listing search. SQL-side filters for the reliable columns; bedrooms in Python."""
-    q = get_client().table("listing").select(LISTING_CARD_COLUMNS)
+    q = get_client().table("listings_full").select(LISTING_CARD_COLUMNS)
     if project_id:
         q = q.eq("project_id", project_id)
     if property_type:
@@ -52,7 +52,7 @@ def search_listings(
 def get_listing(listing_id: str) -> dict | None:
     rows = (
         get_client()
-        .table("listing")
+        .table("listings_full")
         .select(LISTING_DETAIL_COLUMNS)
         .eq("id", listing_id)
         .limit(1)
@@ -65,7 +65,7 @@ def get_listing(listing_id: str) -> dict | None:
 def list_by_project(project_id: str, limit: int) -> list[dict]:
     rows = (
         get_client()
-        .table("listing")
+        .table("listings_full")
         .select(LISTING_CARD_COLUMNS)
         .eq("project_id", project_id)
         .order("price_vnd", desc=False)
@@ -81,7 +81,7 @@ def get_many(listing_ids: list[str]) -> list[dict]:
     """Fetch several listings by id (used by compare)."""
     rows = (
         get_client()
-        .table("listing")
+        .table("listings_full")
         .select(LISTING_DETAIL_COLUMNS)
         .in_("id", listing_ids)
         .execute()
@@ -99,7 +99,7 @@ def project_price_stats(project_id: str) -> dict:
     """
     rows = (
         get_client()
-        .table("listing")
+        .table("listings_full")
         .select("price_vnd,price_per_m2_vnd,area_m2,property_type,bedrooms")
         .eq("project_id", project_id)
         .execute()
@@ -139,7 +139,7 @@ def map_points(project_id: str | None, limit: int) -> list[dict]:
     """Lightweight lat/lng points for the map view (US5)."""
     q = (
         get_client()
-        .table("listing")
+        .table("listings_full")
         .select("id,title,property_type,price_vnd,lat,lng")
         .not_.is_("lat", "null")
         .not_.is_("lng", "null")
