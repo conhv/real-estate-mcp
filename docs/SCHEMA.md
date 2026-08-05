@@ -4,7 +4,9 @@ Project ref: `edfmsjiptksqhqfqptcc`. Soi trực tiếp ngày 2026-08-03.
 Schema: `public`. **RLS bật trên mọi bảng** → MCP server dùng service-role key.
 Anon key sẽ trả về 0 dòng cho mọi truy vấn **mà không báo lỗi** — xem docs/TESTING.md.
 
-Chỉ có **hai** bảng và cả hai đều đang dùng: `locations` và `listings`.
+Chỉ có **hai** bảng và cả hai đều đang dùng: `locations` và `listings`, cộng một **view**
+`listings_clean` (xem `migrations/002_listings_clean.sql`) — mọi truy vấn listing trong code đi
+qua view này, không đọc thẳng bảng gốc.
 **Không có bảng `projects`** — project nằm trong `locations` dưới dạng các dòng có `level='project'`.
 **Không có bảng documents/embeddings** và `pgvector` chưa cài → RAG (US3) phải xây từ đầu.
 
@@ -118,6 +120,25 @@ source = 'vinhomes-market'  1091 dòng (46%)
 | image_count | bigint | số ảnh **ở nguồn**, nên thường lớn hơn `len(images)` (840/2355 dòng > 40) |
 | raw | jsonb | payload gốc đầy đủ — không bao giờ trả cho agent |
 | crawled_at, first_seen, last_seen | timestamptz | |
+
+### View `listings_clean` — cái mà code thực sự đọc
+
+`migrations/002_listings_clean.sql` tạo view = `SELECT listings.*` cộng hai cột suy ra:
+
+| Cột | Suy từ | Ghi chú |
+|---|---|---|
+| `bedrooms_norm` | tiêu đề tin đăng | `0` nếu tiêu đề có "studio"; ngược lại lấy số trước "PN"; **không** rơi về cột `bedrooms` mà trả NULL |
+| `has_flex_room` | tiêu đề tin đăng | `true` khi tiêu đề dạng "2 PN **+ 1**" — phòng đa năng, không tính là phòng ngủ (344 dòng) |
+
+Phân bố `bedrooms_norm` trên 2355 dòng: **0→379 · 1→641 · 2→945 · 3→227 · 4→2 · NULL→161**
+
+> ⚠️ **Đừng lọc trên cột `bedrooms` thô.** Nó gọi 139 căn studio là "1 phòng ngủ", trong khi 188
+> căn studio khác nằm ở `bedrooms=0`; và nó gán `bedrooms=1` cho 39/48 shophouse cùng 11/11
+> căn thương mại — giá trị mặc định chứ không phải dữ liệu. `shaping.py` **không select cột này**
+> ở bất kỳ đâu; agent luôn nhận `bedrooms` đã chuẩn hoá.
+>
+> 161 dòng có `bedrooms_norm` NULL gần như toàn bộ là liền kề/shophouse/thương mại — chúng
+> không có khái niệm số phòng ngủ, nên bị mọi bộ lọc phòng ngủ loại ra. Đó là chủ ý.
 
 ### Các giá trị `property_type`
 

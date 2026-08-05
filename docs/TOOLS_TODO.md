@@ -222,9 +222,59 @@ DB hiện **chưa có bảng documents** và **pgvector chưa được cài**.
       nhận. (Đây là thao tác *ghi* — cân nhắc RLS và rate-limit trước khi bật.)
 
 ### Nâng cấp chất lượng tìm kiếm
-- [ ] Chuẩn hóa các cột số của listing (generated column hoặc một view đã làm sạch) để
+- [x] Chuẩn hóa các cột số của listing (generated column hoặc một view đã làm sạch) để
       `bedrooms`/`area_m2` lọc theo khoảng được ở SQL, và bỏ phần lọc bằng Python trong
       `search_listings`.
+  - ⚠️ **Tiền đề của mục này đã lỗi thời.** Mục được viết khi các cột số còn lưu dạng `text`.
+    DB hiện tại: `bedrooms` là `int`, `area_m2` là `float8`, nên **không cần** generated column
+    hay view để lọc theo khoảng — `gte`/`lte` chạy thẳng trong SQL.
+  - ✅ Phần lọc bằng Python đã bỏ từ lúc làm US1 (xem mục `search_listings` ở trên).
+  - ✅ Thêm `min_area_m2` / `max_area_m2` — trước đây **không hề có** bộ lọc diện tích nào.
+    Kiểm chứng: 50–70m² → trả về đúng dải, 80–120m² → 92 căn.
+  - ✅ Thêm `min_bedrooms` / `max_bedrooms` để diễn đạt "từ N phòng trở lên"; `bedrooms` cũ giữ
+    nguyên cho khớp chính xác.
+  - ✅ Khoảng ngược (`min > max`) nay raise `ToolError` nói rõ trường nào. Trước đây SQL trả rỗng
+    và agent hiểu thành "không có căn nào như vậy" thay vì "bạn hỏi một khoảng bất khả thi".
+  - 🐞 **Việc còn lại — và lý do thật sự cần view, khác hẳn lý do ghi trong mục này.**
+    Đối chiếu cột `bedrooms` với nhãn trong tiêu đề tin đăng:
+
+    | `bedrooms` | n | Tiêu đề thực sự nói gì |
+    |---:|---:|---|
+    | 0 | 188 | Studio 100% ✅ |
+    | **1** | **882** | **Studio 139 · 1PN 411 · 1PN+1 206 · khác 126** ⚠️ |
+    | 2 | 908 | 2PN 782 · 2PN+1 126 ✅ |
+    | 3 | 219 | 3PN 218 ✅ |
+
+    Studio bị mã hoá **hai kiểu**: 188 dòng ở `bedrooms=0` và 139 dòng nữa lẫn trong
+    `bedrooms=1`. Nên `search_listings(bedrooms=0)` chỉ tìm được 188 trên khoảng 327 căn studio,
+    còn `bedrooms=1` trả về 139 căn studio không phải một phòng ngủ. Từ 2PN trở lên thì sạch.
+    Cột `bedrooms_plus` cũng không cứu được: 300 dòng tiêu đề ghi trơn "1 PN" nhưng cờ vẫn bật.
+  - ✅ **Đã xử lý bằng `migrations/002_listings_clean.sql`** — view `listings_clean` suy
+    `bedrooms_norm` từ **tiêu đề tin đăng** thay vì tin cột số (93% số dòng đọc được từ tiêu đề;
+    không tiêu đề nào dùng chữ "phòng ngủ", luôn viết tắt "PN"). Kết quả đã chạy trên Supabase,
+    khớp chính xác dự đoán:
+
+    | `bedrooms_norm` | 0 | 1 | 2 | 3 | 4 | NULL |
+    |---|---:|---:|---:|---:|---:|---:|
+    | số dòng | **379** | 641 | 945 | 227 | 2 | 161 |
+
+    Studio nhảy từ 188 lên **379**; `bedrooms=1` không còn lẫn studio nào.
+  - ✅ **Không rơi về cột `bedrooms` khi tiêu đề im lặng → trả NULL.** 126/161 dòng còn lại là
+    shophouse/liền kề/thương mại đang mang `bedrooms=1` giả (`shophouse` 39/48,
+    `thuong_mai_dich_vu` 11/11). NULL nghĩa "chưa rõ", trung thực hơn số 1 sai — và NULL thì bị
+    mọi bộ lọc phòng ngủ loại ra, đúng ý muốn. Đánh đổi: mất 1 dòng `lien_ke` có `bedrooms=4`
+    thật mà tiêu đề không ghi.
+  - ✅ Thêm `has_flex_room` phân biệt "2 PN" với "2 PN + 1" (phòng đa năng, 344 dòng). Cột
+    `bedrooms_plus` sẵn có không dùng được: nó bật cả trên 300 dòng tiêu đề ghi trơn "1 PN".
+  - ✅ Dùng VIEW chứ không phải generated column: quy tắc suy từ tiêu đề còn phải chỉnh, view sửa
+    bằng `CREATE OR REPLACE` và không đụng dòng dữ liệu nào; generated column phải `ALTER TABLE`
+    toàn bảng và không lùi được.
+  - ✅ Index: `(price_vnd, id)` phục vụ cả sắp xếp lẫn phân trang — đáng giá nhất; thêm
+    `(project_id, price_vnd)`, `(area_m2)`, `(bedrooms)`.
+  - ✅ Mọi truy vấn listing nay đi qua view (hằng số `LISTINGS` trong service), cột thô `bedrooms`
+    **không còn được select** ở đâu cả.
+  - Test: 6 test mới (khoảng diện tích trong SQL, khoảng phòng ngủ, khoảng ngược raise,
+    `bedrooms` khớp tiêu đề, shophouse bị loại khỏi lọc phòng ngủ, `has_flex_room` khớp "+1").
 - [ ] Thêm **`search_listings_by_province(province, ...)`**: đổi tỉnh thành → danh sách project id
       qua `locations`, rồi lọc listing (nhớ rằng: `listing` không có cột province).
 - [ ] Chuyển phần thống kê của `project_overview` sang Postgres RPC để không phải fetch mọi dòng.

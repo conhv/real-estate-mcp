@@ -47,7 +47,8 @@ class TestShapeListingCard:
             "id": "oh:XYZ",
             "title": "Căn 2PN",
             "area_m2": "72.3",  # text in DB
-            "bedrooms": "2",  # text in DB
+            "bedrooms_norm": "2",  # derived by the listings_clean view, not the raw column
+            "has_flex_room": True,
             "bathrooms": "2",  # text in DB
             "price_vnd": 3_000_000_000,  # bigint
             "status": "�ANG BÁN",  # corrupted
@@ -57,6 +58,7 @@ class TestShapeListingCard:
         card = shaping.shape_listing_card(raw)
         assert card["area_m2"] == 72.3
         assert card["bedrooms"] == 2
+        assert card["has_flex_room"] is True
         assert card["price_vnd"] == 3_000_000_000
         assert card["status"] == "ĐANG BÁN"
         # returns plain JSON-serializable dict

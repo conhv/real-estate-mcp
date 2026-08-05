@@ -298,6 +298,112 @@ async def test_search_listings_bedrooms_filter_is_not_truncated(mcp_server):
 
 
 @needs_db
+async def test_bedrooms_agree_with_the_listing_title(mcp_server):
+    """`bedrooms` is derived from the title by the listings_clean view (migrations/002).
+
+    The raw column called 139 studios "1 bedroom". If this fails with "Could not find the
+    table public.listings_clean", the migration has not been applied.
+    """
+    studios = tool_data(await mcp_server.call_tool(
+        "search_listings", {"bedrooms": 0, "limit": 100}
+    ))
+    assert studios, "expected studio listings"
+    assert all("studio" in c["title"].lower() for c in studios), (
+        "a unit counted as 0 bedrooms must be advertised as a studio"
+    )
+
+    ones = tool_data(await mcp_server.call_tool(
+        "search_listings", {"bedrooms": 1, "limit": 100}
+    ))
+    assert not any("studio" in c["title"].lower() for c in ones), (
+        "studios must no longer leak into the 1-bedroom bucket"
+    )
+
+
+@needs_db
+async def test_bedroom_filter_excludes_non_residential(mcp_server):
+    """Shophouses carried a placeholder bedrooms=1; the view leaves them null instead.
+
+    Without this, "căn 1 phòng ngủ" returned commercial units.
+    """
+    for pt in ("shophouse", "thuong_mai_dich_vu"):
+        with_beds = tool_data(await mcp_server.call_tool(
+            "search_listings", {"property_type": pt, "min_bedrooms": 0, "limit": 50}
+        ))
+        assert with_beds == [], f"{pt} should have no bedroom count at all, got {len(with_beds)}"
+        # …but the units themselves are still findable without a bedroom filter.
+        plain = tool_data(await mcp_server.call_tool(
+            "search_listings", {"property_type": pt, "limit": 5}
+        ))
+        assert plain, f"{pt} listings disappeared entirely"
+        assert all(c["bedrooms"] is None for c in plain)
+
+
+@needs_db
+async def test_has_flex_room_marks_the_plus_one(mcp_server):
+    """"2 PN + 1" is 2 bedrooms plus a multi-purpose room, not 3 bedrooms."""
+    cards = tool_data(await mcp_server.call_tool(
+        "search_listings", {"bedrooms": 2, "limit": 100}
+    ))
+    assert cards
+    for card in cards:
+        titled_plus = "+ 1" in card["title"] or "+1" in card["title"]
+        assert card["has_flex_room"] == titled_plus, f"mismatch on {card['title']!r}"
+
+
+@needs_db
+async def test_search_listings_area_range_runs_in_sql(mcp_server):
+    """`area_m2` bounds must narrow the query, not a page of results.
+
+    Same failure mode the bedrooms filter had: a post-fetch filter would cap the cheapest
+    `limit` rows first and then discard most of them, under-returning without any error.
+    """
+    lo, hi = 50.0, 70.0
+    out = tool_data(await mcp_server.call_tool(
+        "search_listings", {"min_area_m2": lo, "max_area_m2": hi, "limit": 50}
+    ))
+    assert len(out) == 50, "a 50-70 m2 window holds far more than 50 listings"
+    assert all(lo <= c["area_m2"] <= hi for c in out)
+
+    # Narrowing the window must not return rows the wider one already excluded.
+    narrow = tool_data(await mcp_server.call_tool(
+        "search_listings", {"min_area_m2": 60.0, "max_area_m2": hi, "limit": 50}
+    ))
+    assert all(60.0 <= c["area_m2"] <= hi for c in narrow)
+
+
+@needs_db
+async def test_search_listings_bedroom_range(mcp_server):
+    """min/max bedrooms express "từ N phòng trở lên", which exact match cannot."""
+    two_plus = tool_data(await mcp_server.call_tool(
+        "search_listings", {"min_bedrooms": 2, "limit": 50}
+    ))
+    assert two_plus and all(c["bedrooms"] >= 2 for c in two_plus)
+
+    exactly_two = tool_data(await mcp_server.call_tool(
+        "search_listings", {"bedrooms": 2, "limit": 50}
+    ))
+    assert all(c["bedrooms"] == 2 for c in exactly_two)
+
+    window = tool_data(await mcp_server.call_tool(
+        "search_listings", {"min_bedrooms": 2, "max_bedrooms": 3, "limit": 50}
+    ))
+    assert all(2 <= c["bedrooms"] <= 3 for c in window)
+
+
+@needs_db
+async def test_search_listings_rejects_inverted_ranges(mcp_server):
+    """An impossible window must say so, not answer "no listings match"."""
+    for bad in [
+        {"min_price_vnd": 5_000_000_000, "max_price_vnd": 1_000_000_000},
+        {"min_bedrooms": 3, "max_bedrooms": 1},
+        {"min_area_m2": 90.0, "max_area_m2": 40.0},
+    ]:
+        with pytest.raises(ToolError):
+            await mcp_server.call_tool("search_listings", bad)
+
+
+@needs_db
 async def test_search_listings_price_bounds_run_in_sql(mcp_server):
     """Price bounds must narrow the query itself, so `limit` caps matches and not the page."""
     lo, hi = 2_000_000_000, 4_000_000_000
@@ -368,7 +474,8 @@ async def test_get_listing_returns_every_documented_field(mcp_server, sample_lis
     ))
     expected = {
         "id", "title", "url", "source", "project_id", "building_id", "property_type",
-        "area_m2", "bedrooms", "bathrooms", "price_vnd", "price_per_m2_vnd", "status",
+        "area_m2", "bedrooms", "has_flex_room", "bathrooms", "price_vnd", "price_per_m2_vnd",
+        "status",
         "lat", "lng", "thumbnail", "floor_num", "floor_band", "direction_balcony", "view",
         "legal_status", "furnishing", "usage_status", "price_type", "area_type",
         "image_count", "images", "first_seen", "last_seen", "crawled_at",

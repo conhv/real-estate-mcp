@@ -30,14 +30,19 @@ def register(mcp: FastMCP) -> None:
         min_price_vnd: int | None = None,
         max_price_vnd: int | None = None,
         bedrooms: int | None = None,
+        min_bedrooms: int | None = None,
+        max_bedrooms: int | None = None,
+        min_area_m2: float | None = None,
+        max_area_m2: float | None = None,
         limit: int = 10,
     ) -> list[dict]:
         """Search property LISTINGS with filters. Use after the project is known (US1 results).
 
         Returns a list of listing cards {id, title, url, source, project_id, building_id,
-        property_type, area_m2, bedrooms, bathrooms, price_vnd, price_per_m2_vnd, price_type,
-        status, lat, lng, thumbnail}, cheapest first. An empty list means nothing matched the
-        filters, not that the search failed — offer to relax a filter rather than an error.
+        property_type, area_m2, bedrooms, has_flex_room, bathrooms, price_vnd,
+        price_per_m2_vnd, price_type, status, lat, lng, thumbnail}, cheapest first. An empty
+        list means nothing matched the filters, not that the search failed — offer to relax a
+        filter rather than reporting an error.
 
         Read `price_type` on every card before quoting its `price_vnd`: "asking" is a price the
         seller is asking, "estimate" (1264 of 2355 listings) is a figure the source computed and
@@ -50,8 +55,14 @@ def register(mcp: FastMCP) -> None:
 
         Filters combine with AND and all run in the database, so `limit` caps the cheapest
         matches rather than hiding some. Note that `bedrooms` is missing on 6% of listings and
-        `building_id` on 10%, so filtering on them drops listings that simply lack the field
-        rather than ones that fail the test.
+        `area_m2` on 6%, so filtering on them drops listings that simply lack the field rather
+        than ones that fail the test.
+
+        `bedrooms` is read out of each listing's title, so it agrees with what the seller
+        advertised: 0 means studio, and a unit whose title never states a count (mostly
+        shophouses and townhouses) has `bedrooms: null` and is excluded by any bedroom filter.
+        `has_flex_room` marks the "+1" in "2 PN + 1" — a multi-purpose room, not a bedroom, so
+        those units still count as 2.
 
         Args:
             project_id: restrict to one project, e.g. "oh:amber-riverside". Strongly recommended;
@@ -62,13 +73,30 @@ def register(mcp: FastMCP) -> None:
                 biet_thu_don_lap, biet_thu_song_lap, biet_thu_tu_lap. Anything else raises.
             min_price_vnd: lowest acceptable total price in VND (e.g. 3000000000 for 3 tỷ).
             max_price_vnd: highest acceptable total price in VND.
-            bedrooms: exact bedroom count. The data holds 1-4.
+            bedrooms: exact bedroom count, 0-4 (0 = studio). Use this OR the min/max pair,
+                not both — they combine with AND, so bedrooms=2 with min_bedrooms=3 matches
+                nothing.
+            min_bedrooms: lowest acceptable bedroom count, for "từ N phòng ngủ trở lên".
+            max_bedrooms: highest acceptable bedroom count.
+            min_area_m2: smallest acceptable floor area. The stock runs 24.5-162 m2; the
+                middle half sits between 43 and 64 m2, so 50 m2 is an ordinary floor here,
+                not a large one.
+            max_area_m2: largest acceptable floor area.
             limit: max cards to return (default 10).
         """
         if property_type and property_type not in PROPERTY_TYPES:
             raise ToolError(
                 f"Unknown property_type '{property_type}'. Valid: {', '.join(PROPERTY_TYPES)}."
             )
+        # An inverted range matches nothing in SQL, which reads to the agent as "no such unit
+        # exists" rather than "you asked for an impossible window". Say which one it was.
+        for name, low, high in (
+            ("price_vnd", min_price_vnd, max_price_vnd),
+            ("bedrooms", min_bedrooms, max_bedrooms),
+            ("area_m2", min_area_m2, max_area_m2),
+        ):
+            if low is not None and high is not None and low > high:
+                raise ToolError(f"min_{name} ({low}) is greater than max_{name} ({high}).")
         return svc.search_listings(
             project_id=project_id,
             building_id=building_id,
@@ -76,6 +104,10 @@ def register(mcp: FastMCP) -> None:
             min_price_vnd=min_price_vnd,
             max_price_vnd=max_price_vnd,
             bedrooms=bedrooms,
+            min_bedrooms=min_bedrooms,
+            max_bedrooms=max_bedrooms,
+            min_area_m2=min_area_m2,
+            max_area_m2=max_area_m2,
             limit=limit,
         )
 
@@ -88,18 +120,18 @@ def register(mcp: FastMCP) -> None:
         furnishing, photos).
 
         Returns one object with every card field (id, title, url, source, project_id,
-        building_id, property_type, area_m2, bedrooms, bathrooms, price_vnd, price_per_m2_vnd,
-        price_type, status, lat, lng, thumbnail) plus the detail-only fields: floor_num,
-        floor_band, direction_balcony, view, legal_status, furnishing, usage_status, area_type,
-        image_count, images, first_seen, last_seen, crawled_at. Raises if the id does not exist,
-        so a returned object is always a real listing.
+        building_id, property_type, area_m2, bedrooms, has_flex_room, bathrooms, price_vnd,
+        price_per_m2_vnd, price_type, status, lat, lng, thumbnail) plus the detail-only fields:
+        floor_num, floor_band, direction_balcony, view, legal_status, furnishing, usage_status,
+        area_type, image_count, images, first_seen, last_seen, crawled_at. Raises if the id
+        does not exist, so a returned object is always a real listing.
 
         Reading the result honestly:
         - CHECK `price_type` BEFORE QUOTING `price_vnd`. It is "asking" on 1091 listings (a real
           price the seller is asking) but "estimate" on 1264 (a figure the source computed, that
           nobody has asked for). Always say which one you are quoting — "giá chào bán" for
-          asking, "giá tham khảo do nguồn ước tính" for estimate. Presenting an estimate as an
-          asking price misstates what the unit costs, and this tool does not do valuation.
+          asking, "giá tham khảo do nguồn ước tính" for estimate. Presenting an estimate as
+          an asking price misstates the cost, and this tool does not do valuation.
         - The data is two catalogues stacked, and `source` tells you which row you are reading:
           "vinhomes-market" carries status and floor_num but often lacks bathrooms/view;
           "onehousing" carries bathrooms/view/floor_band but never status, and all of its prices
