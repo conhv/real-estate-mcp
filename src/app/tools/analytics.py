@@ -7,6 +7,7 @@ from fastmcp.exceptions import ToolError
 
 from ..services import listings as listing_svc
 from ..services import locations as loc_svc
+from ..services import osm as osm_svc
 
 
 def register(mcp: FastMCP) -> None:
@@ -25,11 +26,27 @@ def register(mcp: FastMCP) -> None:
         return {"project": project, "stats": listing_svc.project_price_stats(project_id)}
 
     @mcp.tool
-    def map_listings(project_id: str | None = None, limit: int = 200) -> dict:
-        """Geo points for the map view (US5): listings with lat/lng.
+    def map_listings(project_id: str | None = None, limit: int = 200, include_amenities: bool = False) -> dict:
+        """Geo points for the map view (US5): listings with lat/lng, and optionally surrounding amenities.
 
-        Use for "xem bản đồ". Optionally scope to one project. Returns
-        {"count": n, "points": [{id, title, property_type, price_vnd, lat, lng}]}.
+        Use for "xem bản đồ". Optionally scope to one project. 
+        Set include_amenities=True ONLY when the user explicitly asks for amenities or POIs nearby.
+        Returns {"count": n, "points": [{id, title, property_type, price_vnd, lat, lng}], "amenities": [...]}.
         """
         points = listing_svc.map_points(project_id=project_id, limit=limit)
-        return {"count": len(points), "points": points}
+        res = {"count": len(points), "points": points}
+        
+        if include_amenities and points:
+            # Calculate simple centroid
+            center_lat = sum(p["lat"] for p in points) / len(points)
+            center_lng = sum(p["lng"] for p in points) / len(points)
+            res["amenities"] = osm_svc.get_nearby_amenities(center_lat, center_lng, radius=1000)
+        elif include_amenities and project_id:
+            # Fallback to project coordinates if no listing points
+            proj = loc_svc.get_location(project_id)
+            if proj and proj.get("lat") and proj.get("lng"):
+                res["amenities"] = osm_svc.get_nearby_amenities(proj["lat"], proj["lng"], radius=1000)
+            else:
+                res["amenities"] = []
+                
+        return res
