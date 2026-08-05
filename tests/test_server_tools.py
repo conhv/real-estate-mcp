@@ -16,7 +16,7 @@ EXPECTED_ENABLED_TOOLS = {
     # US6 / US4 / US5
     "compare_listings", "project_overview", "map_listings",
     # US2.1 / US2.2
-    "start_visit_booking", "start_consultation",
+    "start_visit_booking", "start_consultation", "submit_booking",
 }
 
 

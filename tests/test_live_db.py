@@ -738,8 +738,10 @@ async def test_form_spec_matches_the_user_story(mcp_server, sample_project_id, t
     ))
 
     assert set(guest) == {
-        "action", "project", "authenticated", "fields", "submit_endpoint", "persisted"
+        "action", "project", "authenticated", "fields",
+        "submit_tool", "submit_endpoint", "persisted",
     }
+    assert guest["submit_tool"] == "submit_booking", "the form must name the tool that stores it"
     assert guest["action"] == action
     assert guest["submit_endpoint"].endswith(action)
     assert guest["project"]["id"] == sample_project_id and guest["project"]["name"]
@@ -783,6 +785,133 @@ async def test_form_rejects_non_project_ids(mcp_server, tool):
     for bad in ["khong-ton-tai-xyz", "", a_cluster, a_building]:
         with pytest.raises(ToolError):
             await mcp_server.call_tool(tool, {"project_id": bad})
+
+
+@pytest.fixture
+def booking_cleanup():
+    """Delete whatever a test wrote to `bookings`, even if the test fails.
+
+    These are the only tests in the suite that write, and they write to the one table holding
+    personal data. Leaving rows behind would also poison the dedupe window for the next run.
+    """
+    import sys
+
+    sys.path.insert(0, "src")
+    from app.db import get_client
+
+    phones: list[str] = []
+    yield phones
+    if phones:
+        get_client().table("bookings").delete().in_("contact->>phone", phones).execute()
+
+
+@needs_db
+async def test_submit_booking_stores_and_returns_an_id(mcp_server, sample_project_id, booking_cleanup):
+    """The write path end to end: a filled form comes back with an id worth confirming."""
+    phone = "0900000001"
+    booking_cleanup.append(phone)
+    out = tool_data(await mcp_server.call_tool("submit_booking", {
+        "kind": "visit_booking",
+        "project_id": sample_project_id,
+        "payload": {
+            "full_name": "Nguyễn Văn Test",
+            "phone": phone,
+            "preferred_time": "2026-09-01T14:00:00+07:00",
+            "note": "test",
+        },
+    }))
+    assert set(out) == {
+        "booking_id", "kind", "project", "preferred_time", "created_at",
+        "persisted", "duplicate_of_existing",
+    }
+    assert out["persisted"] is True, "the whole point is that this one does write"
+    assert out["booking_id"] and out["project"]["id"] == sample_project_id
+    assert out["duplicate_of_existing"] is False
+
+
+@needs_db
+async def test_submit_booking_is_idempotent_within_the_window(mcp_server, sample_project_id, booking_cleanup):
+    """A retry must not book the same person twice.
+
+    Agents retry on timeouts and users double-click. Two rows means the sales team calls the
+    same person about the same unit twice and the user cannot cancel the extra one.
+    """
+    phone = "0900000002"
+    booking_cleanup.append(phone)
+    args = {
+        "kind": "visit_booking",
+        "project_id": sample_project_id,
+        "payload": {"full_name": "Trần Thị Test", "phone": phone,
+                    "preferred_time": "2026-09-02T09:00:00+07:00"},
+    }
+    first = tool_data(await mcp_server.call_tool("submit_booking", args))
+    second = tool_data(await mcp_server.call_tool("submit_booking", args))
+    assert second["booking_id"] == first["booking_id"]
+    assert second["duplicate_of_existing"] is True
+
+
+@needs_db
+async def test_submit_booking_validates_against_the_form_it_handed_out(
+    mcp_server, sample_project_id
+):
+    """Whatever start_visit_booking marked `required` is exactly what submit_booking demands."""
+    form = tool_data(await mcp_server.call_tool(
+        "start_visit_booking", {"project_id": sample_project_id, "is_authenticated": False}
+    ))
+    required = [f["name"] for f in form["fields"] if f["required"]]
+    assert required, "the guest form should require something"
+
+    full = {"full_name": "A", "phone": "0900000003", "preferred_time": "2026-09-03T09:00:00+07:00"}
+    for name in required:
+        with pytest.raises(ToolError) as err:
+            await mcp_server.call_tool("submit_booking", {
+                "kind": "visit_booking",
+                "project_id": sample_project_id,
+                "payload": {k: v for k, v in full.items() if k != name},
+            })
+        assert name in str(err.value)
+
+
+@needs_db
+async def test_submit_booking_rejects_bad_input_without_storing(mcp_server, sample_project_id):
+    """Every rejection path. None of these may leave a row behind."""
+    good = {"full_name": "A", "phone": "0900000004", "preferred_time": "2026-09-04T09:00:00+07:00"}
+    cases = [
+        ({"kind": "khong_ton_tai"}, "unknown kind"),
+        ({"project_id": "khong-ton-tai-xyz"}, "unknown project"),
+        ({"payload": {**good, "budget": "3 tỷ"}}, "field the form never offered"),
+        ({"payload": {**good, "phone": "abc"}}, "not a phone number"),
+        ({"payload": {**good, "email": "nope"}}, "not an email"),
+        ({"payload": {**good, "preferred_time": "chiều mai"}}, "not ISO-8601"),
+    ]
+    for override, why in cases:
+        args = {"kind": "visit_booking", "project_id": sample_project_id, "payload": good}
+        with pytest.raises(ToolError):
+            await mcp_server.call_tool("submit_booking", {**args, **override})
+
+    import sys
+
+    sys.path.insert(0, "src")
+    from app.db import get_client
+
+    left = (
+        get_client().table("bookings").select("id", count="exact")
+        .eq("contact->>phone", good["phone"]).limit(1).execute().count
+    )
+    assert left == 0, f"a rejected booking was stored anyway ({why})"
+
+
+@needs_db
+async def test_submit_booking_authenticated_needs_no_contact(mcp_server, sample_project_id):
+    """Signed-in users send only time and note; contact comes from their profile."""
+    with pytest.raises(ToolError) as err:
+        await mcp_server.call_tool("submit_booking", {
+            "kind": "consultation",
+            "project_id": sample_project_id,
+            "is_authenticated": True,
+            "payload": {"phone": "0900000005", "preferred_time": "2026-09-05T09:00:00+07:00"},
+        })
+    assert "phone" in str(err.value), "the authed form never asked for a phone"
 
 
 @needs_db

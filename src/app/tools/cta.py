@@ -1,16 +1,24 @@
-"""Action/CTA tools — return UI-action payloads (forms, buttons) for the frontend.
+"""Action/CTA tools — UI-action payloads (buttons, forms) plus the one write path.
 
-Per the PRD "Action Triggering": the AI responds with concrete UI actions. These tools do NOT
-write to the DB in this phase; they return the FORM SPEC the UI should render, handling the two
-cases from US2.1/US2.2: authenticated vs not-authenticated. Actually persisting a booking is a
-phase-2 TODO (needs a `bookings` table + write path).
+Per the PRD "Action Triggering": the AI responds with concrete UI actions. `start_visit_booking`
+and `start_consultation` return the FORM SPEC the UI should render, branching on authenticated
+vs not (US2.1/US2.2); `submit_booking` takes the answers back and stores them.
+
+The split matters: an agent that mistakes "here is the form" for "the booking is made" tells the
+user they have an appointment nobody recorded. So the form tools carry `persisted: false` and
+say so in their descriptions, and only submit_booking returns an id worth confirming.
+
+Requires migrations/003_bookings.sql for the write path.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
+from ..services import bookings as booking_svc
 from ..services import listings as listing_svc
 from ..services import locations as loc_svc
 
@@ -30,22 +38,81 @@ _AUTHED_FIELDS = [
 ]
 
 
+_KINDS = ("visit_booking", "consultation")
+
+# Fields that live in the `contact` jsonb rather than in a column of their own.
+_CONTACT_FIELDS = ("full_name", "phone", "email")
+
+
+def _fields_for(is_authenticated: bool) -> list[dict]:
+    """The form spec a caller was handed — and the exact rule submit_booking validates against.
+
+    Reading the requirements back out of the same constant is the point: if someone makes
+    `email` required for guests, the form and the check move together instead of drifting until
+    a booking arrives with a field nobody validated.
+    """
+    return _AUTHED_FIELDS if is_authenticated else _GUEST_FIELDS
+
+
+def _validate_payload(payload: dict, is_authenticated: bool) -> None:
+    allowed = {f["name"] for f in _fields_for(is_authenticated)}
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        # Silently dropping a key would lose whatever the user typed into it.
+        raise ToolError(
+            f"Unknown field(s) {', '.join(unknown)} for this form. "
+            f"Accepted: {', '.join(sorted(allowed))}."
+        )
+    missing = sorted(
+        f["name"]
+        for f in _fields_for(is_authenticated)
+        if f["required"] and not str(payload.get(f["name"]) or "").strip()
+    )
+    if missing:
+        raise ToolError(f"Missing required field(s): {', '.join(missing)}.")
+
+    phone = str(payload.get("phone") or "")
+    if phone and sum(c.isdigit() for c in phone) < 8:
+        raise ToolError(f"'{phone}' does not look like a phone number.")
+    email = str(payload.get("email") or "")
+    if email and ("@" not in email or "." not in email.split("@")[-1]):
+        raise ToolError(f"'{email}' does not look like an email address.")
+
+
+def _normalise_time(value: object) -> str | None:
+    """ISO-8601 in, ISO-8601 out. Reject anything Postgres would choke on later.
+
+    Letting a bad string reach the insert turns a user mistake into a raw PostgREST error that
+    names the column and type; catching it here keeps the message about their input.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).isoformat()  # py3.11+ parses a trailing Z
+    except ValueError:
+        raise ToolError(
+            f"preferred_time '{text}' is not an ISO-8601 datetime. "
+            "Expected something like '2026-08-10T14:00:00+07:00'."
+        ) from None
+
+
 def _form_payload(action: str, project_id: str, is_authenticated: bool) -> dict:
     project = loc_svc.get_location(project_id)
     if project is None or project.get("level") != "project":
         raise ToolError(f"'{project_id}' is not a known project id.")
-    template = _AUTHED_FIELDS if is_authenticated else _GUEST_FIELDS
     return {
         "action": action,  # UI switches on this
         "project": {"id": project["id"], "name": project["name"]},
         "authenticated": is_authenticated,
         # Copy: returning the module-level list would hand every caller the same objects, so one
         # in-place edit (a UI tweaking a label) would change the form for every later call.
-        "fields": [dict(field) for field in template],
-        "submit_endpoint": f"/api/{action}",  # frontend posts the collected form here (phase 2)
-        # Nothing is written to the database yet — see the `bookings` table item in
-        # docs/TOOLS_TODO.md. Stated in the payload as well as the docstrings because an agent
-        # that treats this call as "the booking is made" would tell the user it is confirmed.
+        "fields": [dict(field) for field in _fields_for(is_authenticated)],
+        "submit_tool": "submit_booking",  # how the collected answers actually get stored
+        "submit_endpoint": f"/api/{action}",  # frontend alternative to the tool call
+        # This call stores nothing; submit_booking does. Stated in the payload as well as the
+        # docstrings because an agent that treats *this* as "the booking is made" would tell
+        # the user it is confirmed while nothing exists.
         "persisted": False,
     }
 
@@ -58,12 +125,14 @@ def register(mcp: FastMCP) -> None:
         Use when the user picks the "Đặt lịch tham quan" CTA or asks to visit a project. Resolve
         the project first with resolve_project / search_projects.
 
-        This does NOT create a booking. It returns the form for the UI to render, and nothing is
-        saved anywhere — `persisted` is false. Never tell the user their visit is booked or
-        confirmed off the back of this call; the booking exists only once they submit the form.
+        This call does NOT create a booking — `persisted` is false. It returns the form for the
+        UI to render. Never tell the user their visit is booked off the back of it; the booking
+        exists only after their answers go through submit_booking, which returns the id to
+        confirm with.
 
         Returns {"action": "visit_booking", "project": {id, name}, "authenticated": bool,
-        "fields": [{name, label, type, required}], "submit_endpoint": str, "persisted": false}.
+        "fields": [{name, label, type, required}], "submit_tool", "submit_endpoint",
+        "persisted": false}.
         Render `fields` as-is rather than inventing your own; a guest form asks full_name, phone,
         email, preferred_time, note, and a signed-in form asks only preferred_time and note
         because the contact details come from the profile. Raises if `project_id` is not a real
@@ -87,9 +156,9 @@ def register(mcp: FastMCP) -> None:
         example when a policy or legal question falls outside what these tools can answer.
         Resolve the project first with resolve_project / search_projects.
 
-        This does NOT request a consultation. It returns the form for the UI to render, and
-        nothing is saved anywhere — `persisted` is false. Never tell the user an advisor will
-        contact them off the back of this call; that only follows once they submit the form.
+        This call does NOT request a consultation — `persisted` is false. It returns the form
+        for the UI to render. Never tell the user an advisor will contact them off the back of
+        it; that only follows once their answers go through submit_booking.
 
         Returns the same shape as start_visit_booking with "action": "consultation" —
         {"action", "project": {id, name}, "authenticated", "fields": [{name, label, type,
@@ -104,6 +173,83 @@ def register(mcp: FastMCP) -> None:
                 start_visit_booking for why.
         """
         return _form_payload("consultation", project_id, is_authenticated)
+
+    @mcp.tool
+    def submit_booking(
+        kind: str,
+        project_id: str,
+        payload: dict,
+        is_authenticated: bool = False,
+    ) -> dict:
+        """Store a filled-in visit-booking or consultation form. THIS ONE WRITES.
+
+        Use only after the user has actually supplied the answers that start_visit_booking or
+        start_consultation asked for. This is the only tool in the server that records anything,
+        and a stored booking is a promise that a real person will be contacted — do not call it
+        to "check" something, and do not invent values the user did not give you.
+
+        Returns {"booking_id": str, "kind": str, "project": {id, name}, "preferred_time": str
+        |null, "created_at": str, "persisted": true, "duplicate_of_existing": bool}. Once you
+        have that object you may tell the user their request is recorded, and give them the
+        `booking_id` as a reference. `duplicate_of_existing` true means an identical request
+        arrived in the last 10 minutes and this call returned the original instead of making a
+        second one — still confirm it, just do not say a new one was created.
+
+        Raises rather than storing anything half-right: unknown or missing fields, a phone that
+        is not a phone, a `preferred_time` that is not ISO-8601, or a `project_id` that is not a
+        real project. Read the message, fix the input, call again.
+
+        Args:
+            kind: "visit_booking" for a site visit (US2.1), "consultation" for buyer advice
+                (US2.2). Must match the form the user filled.
+            project_id: the project the request is about, from resolve_project.
+            payload: the user's answers, keyed exactly as the form's field names. Guests send
+                full_name, phone, email, preferred_time, note; signed-in users send only
+                preferred_time and note. Anything else is rejected rather than dropped.
+            is_authenticated: whether this user is signed in — session state from the host
+                application, not something to infer. Guessing true for a guest strips the
+                contact fields out of the form and stores a request nobody can answer.
+        """
+        if kind not in _KINDS:
+            raise ToolError(f"Unknown kind '{kind}'. Valid: {', '.join(_KINDS)}.")
+        project = loc_svc.get_location(project_id)
+        if project is None or project.get("level") != "project":
+            raise ToolError(f"'{project_id}' is not a known project id.")
+        if not isinstance(payload, dict):
+            raise ToolError("payload must be an object of the form's field names.")
+
+        _validate_payload(payload, is_authenticated)
+        preferred_time = _normalise_time(payload.get("preferred_time"))
+        note = str(payload.get("note") or "").strip() or None
+        contact = {
+            name: str(payload[name]).strip()
+            for name in _CONTACT_FIELDS
+            if str(payload.get(name) or "").strip()
+        }
+
+        existing = booking_svc.find_recent_duplicate(
+            kind=kind,
+            project_id=project_id,
+            phone=contact.get("phone"),
+            preferred_time=preferred_time,
+        )
+        row = existing or booking_svc.create_booking(
+            kind=kind,
+            project_id=project_id,
+            is_authenticated=is_authenticated,
+            contact=contact,
+            preferred_time=preferred_time,
+            note=note,
+        )
+        return {
+            "booking_id": row["id"],
+            "kind": row["kind"],
+            "project": {"id": project["id"], "name": project["name"]},
+            "preferred_time": row.get("preferred_time"),
+            "created_at": row["created_at"],
+            "persisted": True,
+            "duplicate_of_existing": existing is not None,
+        }
 
     @mcp.tool
     def listing_cta_actions(listing_id: str) -> dict:

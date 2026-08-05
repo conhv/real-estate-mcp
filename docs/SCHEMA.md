@@ -4,9 +4,10 @@ Project ref: `edfmsjiptksqhqfqptcc`. Soi trực tiếp ngày 2026-08-03.
 Schema: `public`. **RLS bật trên mọi bảng** → MCP server dùng service-role key.
 Anon key sẽ trả về 0 dòng cho mọi truy vấn **mà không báo lỗi** — xem docs/TESTING.md.
 
-Chỉ có **hai** bảng và cả hai đều đang dùng: `locations` và `listings`, cộng một **view**
-`listings_clean` (xem `migrations/002_listings_clean.sql`) — mọi truy vấn listing trong code đi
-qua view này, không đọc thẳng bảng gốc.
+Ba bảng: `locations`, `listings` (chỉ đọc, dữ liệu công khai) và `bookings` (**ghi, chứa dữ
+liệu cá nhân** — xem cuối tài liệu). Cộng một **view** `listings_clean`
+(`migrations/002_listings_clean.sql`) — mọi truy vấn listing trong code đi qua view này, không
+đọc thẳng bảng gốc.
 **Không có bảng `projects`** — project nằm trong `locations` dưới dạng các dòng có `level='project'`.
 **Không có bảng documents/embeddings** và `pgvector` chưa cài → RAG (US3) phải xây từ đầu.
 
@@ -207,6 +208,43 @@ phòng vệ (chạy trên dữ liệu sạch thì không tốn gì).
 Các cách lách dựng trên chúng thì **đã được gỡ bỏ**: `search_listings` từng lọc `bedrooms` bằng
 Python sau khi fetch dư `limit * 3` dòng, khiến `bedrooms=2` ở Vinhomes Grand Park trả về 0 kết
 quả trong khi có 251 căn. Nay `bedrooms` lọc thẳng trong SQL.
+
+---
+
+## `bookings` — yêu cầu đặt lịch / tư vấn (US2.1, US2.2)
+
+Tạo bởi `migrations/003_bookings.sql`. **Bảng ghi duy nhất, và là bảng duy nhất chứa dữ liệu
+cá nhân.** Hiện đang rỗng: đường ghi chưa bật, `start_visit_booking`/`start_consultation` vẫn
+trả `persisted: false` cho tới khi có tool `submit_booking`.
+
+| cột | kiểu | ghi chú |
+|---|---|---|
+| id | uuid | PK, mặc định `gen_random_uuid()` |
+| kind | text | `CHECK IN ('visit_booking','consultation')` — khớp đúng hai giá trị `action` mà `tools/cta.py` sinh ra |
+| project_id | text | → `locations.id`. **Chưa có FK** vì `locations` không có PK (xem phần tuỳ chọn trong migration 003) |
+| is_authenticated | bool | mặc định `false`. Không có cột này thì `contact` rỗng trở nên nhập nhằng: "lấy từ hồ sơ" hay "form lỗi mất liên hệ"? |
+| contact | jsonb | `{full_name, phone, email}` với khách vãng lai; `{}` khi đã đăng nhập |
+| preferred_time | timestamptz | **nullable** dù form đánh dấu bắt buộc — "gọi lúc nào cũng được" là yêu cầu hợp lệ có thể xuất hiện sau |
+| note | text | |
+| created_at | timestamptz | mặc định `now()` |
+
+**Ràng buộc `bookings_guest_needs_phone`:** khách vãng lai bắt buộc phải có `contact->>'phone'`
+khác rỗng. Một yêu cầu không có cách liên hệ thì vô dụng — không ai gọi lại được và người đó
+ngồi chờ một cuộc hẹn không tồn tại. Form đã đánh dấu `phone` required; ràng buộc này khiến quy
+tắc đó không lách được bằng insert trực tiếp. Đã kiểm chứng: insert thiếu phone bị chặn với lỗi
+`23514`.
+
+> 🔒 **Bảo mật khác hẳn hai bảng kia.** PostgREST tự phơi mọi bảng trong `public` ra API; với
+> `locations`/`listings` thì vô hại vì dữ liệu công khai, còn ở đây lộ ra là lộ số điện thoại
+> người thật. Khoá hai lớp:
+> - `ENABLE ROW LEVEL SECURITY` **không kèm policy nào** → từ chối tất cả với anon/authenticated
+> - `REVOKE ALL ... FROM anon, authenticated` → nếu sau này ai lỡ thêm policy `USING (true)`,
+>   thiếu GRANT thì vẫn không đọc được. Một sơ suất không đủ để rò dữ liệu.
+>
+> Service-role key (thứ MCP server dùng) bỏ qua RLS nên vẫn ghi/đọc bình thường.
+
+**Index:** `(project_id, created_at DESC)` cho "yêu cầu mới nhất của dự án này";
+`(created_at DESC)` cho bảng điều khiển chung.
 
 ---
 

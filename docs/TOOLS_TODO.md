@@ -217,9 +217,55 @@ DB hiện **chưa có bảng documents** và **pgvector chưa được cài**.
 - [ ] Bật tool lên: xóa dòng `mcp.disable(...)` trong `rag.py`.
 
 ### Lưu booking (nâng US2.1/US2.2 từ form-spec thành ghi thật)
-- [ ] Tạo bảng `bookings` `(id, project_id, kind, contact jsonb, preferred_time, note, created_at)`.
-- [ ] Thêm tool **`submit_booking(kind, project_id, payload)`** để validate rồi insert, trả về id xác
-      nhận. (Đây là thao tác *ghi* — cân nhắc RLS và rate-limit trước khi bật.)
+- [x] Tạo bảng `bookings` `(id, project_id, kind, contact jsonb, preferred_time, note, created_at)`.
+  - ✅ `migrations/003_bookings.sql`, đã chạy trên Supabase. Bảng rỗng, service-role đọc được,
+    PostgREST nhận diện (HTTP 200).
+  - 🔒 **Bảo mật khác hẳn hai bảng cũ** — đây là bảng duy nhất chứa dữ liệu cá nhân (họ tên,
+    số điện thoại, email của người thật), mà PostgREST thì tự phơi mọi bảng trong `public` ra
+    API. Khoá hai lớp: RLS bật **không kèm policy nào** (từ chối tất cả), **cộng** `REVOKE ALL
+    FROM anon, authenticated` ở tầng GRANT — nếu sau này ai lỡ thêm policy `USING (true)` thì
+    thiếu GRANT vẫn không đọc được. Một sơ suất không đủ để rò dữ liệu.
+  - ✅ Ràng buộc `bookings_guest_needs_phone`: khách vãng lai bắt buộc có số điện thoại.
+    Đã kiểm chứng bằng insert thiếu phone → bị chặn với lỗi `23514`. Form đánh dấu `phone`
+    required, ràng buộc này khiến quy tắc đó không lách được bằng insert trực tiếp.
+  - ✅ Thêm cột `is_authenticated` ngoài đặc tả: thiếu nó thì `contact` rỗng trở nên nhập nhằng
+    giữa "đã đăng nhập, liên hệ lấy từ hồ sơ" và "form lỗi, mất liên hệ".
+  - ✅ `preferred_time` để **nullable** dù form đánh dấu bắt buộc — "gọi tôi lúc nào cũng được"
+    là yêu cầu hợp lệ có thể xuất hiện sau. Ràng buộc DB chỉ nên khoá bất biến không bao giờ đổi.
+  - ⏳ **Khoá ngoại sang `locations` chưa làm** — `locations` không có PRIMARY KEY nên chưa tạo
+    FK được. Đã kiểm: 352 dòng / 352 id khác nhau / không NULL → thêm PK an toàn. Câu lệnh để
+    sẵn ở mục 4 của migration 003, tách riêng vì nó động vào bảng đang dùng.
+  - ⚠️ Chạy migration này **chưa bật tính năng ghi**. Hai tool form vẫn trả `persisted: false`
+    cho tới khi có `submit_booking` ở mục dưới.
+- [x] Thêm tool **`submit_booking(kind, project_id, payload, is_authenticated)`** để validate rồi
+      insert, trả về id xác nhận.
+  - ✅ Trả `{booking_id, kind, project, preferred_time, created_at, persisted: true,
+    duplicate_of_existing}`. Có `booking_id` rồi agent **mới được** nói với khách là đã ghi nhận.
+  - ✅ **Quy tắc validate đọc thẳng từ đặc tả form** (`_fields_for()` dùng chung cho cả
+    `start_visit_booking` lẫn `submit_booking`). Nếu ai đổi `email` thành bắt buộc, form và phần
+    kiểm tra dịch chuyển cùng nhau — không thể lệch cho tới lúc một booking lọt vào với trường
+    chẳng ai kiểm.
+  - ✅ **Trường lạ bị từ chối chứ không bị bỏ qua.** Agent bịa ra `ngan_sach` thì raise, vì âm
+    thầm bỏ khoá đó là vứt mất thứ người dùng đã gõ. Kiểm chứng: *"Unknown field(s) ngan_sach…"*.
+  - ✅ Kiểm SĐT (≥8 chữ số), email (có `@` và tên miền), `preferred_time` phải là ISO-8601 —
+    bắt ở Python để thông báo lỗi nói về *dữ liệu người dùng nhập*, không phải về cột và kiểu
+    của Postgres.
+  - 🔁 **Chống trùng thay cho rate-limit.** Yêu cầu y hệt (cùng `kind` + project + số điện thoại)
+    trong **10 phút** sẽ trả lại id cũ thay vì tạo dòng thứ hai, kèm cờ
+    `duplicate_of_existing=true`. Đây mới là rủi ro có thật: agent retry khi timeout, người dùng
+    bấm hai lần. Hai dòng nghĩa là bên bán gọi cho cùng một người hai lần về cùng một căn, mà
+    khách không có cách nào huỷ cái thừa. Kiểm chứng: gọi hai lần → cùng `booking_id`, DB có
+    đúng 1 dòng.
+    ⚠️ Chống trùng **không phải** rate-limit thật: nó không chặn 100 booking từ 100 số khác nhau.
+    Giới hạn tần suất đúng nghĩa thuộc về API gateway / lớp agent, không phải MCP server vốn
+    không giữ trạng thái giữa các lần gọi.
+  - ✅ RLS đã xử lý ở migration 003 (bật, không policy, `REVOKE` khỏi anon) — đã kiểm:
+    `rls_enabled=true · policy_count=0 · anon_grants=0`.
+  - ✅ Hai tool form nay trả thêm `"submit_tool": "submit_booking"` và docstring chỉ thẳng sang
+    đó; `persisted` vẫn là `false` vì bản thân chúng vẫn không ghi gì — chỉ khác là **đường ghi
+    giờ đã tồn tại** thay vì là việc của giai đoạn sau.
+  - Test: 5 test, có fixture tự dọn dòng đã ghi kể cả khi test đỏ (đây là test duy nhất trong bộ
+    có ghi, và ghi vào bảng chứa dữ liệu cá nhân).
 
 ### Nâng cấp chất lượng tìm kiếm
 - [x] Chuẩn hóa các cột số của listing (generated column hoặc một view đã làm sạch) để
