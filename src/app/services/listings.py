@@ -1,8 +1,12 @@
 """Listing access: search with filters, detail, list-by-project, and aggregate stats.
 
+Reads go through the `listings_clean` view, not the base table — see LISTINGS below.
+
 Note the data-quality realities of the `listings` table (see docs/SCHEMA.md):
-  - area_m2 / bedrooms / bathrooms / floor_num are proper numeric columns in the current DB, but
+  - area_m2 / bathrooms / floor_num are proper numeric columns in the current DB, but
     shaping.py still coerces them defensively — earlier snapshots stored them as TEXT.
+  - the raw `bedrooms` column is unreliable below 2 and is never selected; the view derives
+    `bedrooms_norm` from the listing title instead (migrations/002).
   - price_vnd / price_per_m2_vnd are bigint -> safe to filter/sort in SQL.
   - status has one non-null value ('ĐANG BÁN', 1091 rows) and is NULL on the other 1264, so it
     means "listed for sale" or "unknown" — never "sold". normalize_status stays as a guard.
@@ -28,14 +32,25 @@ from ..shaping import (
     to_int,
 )
 
+# Every read goes through the view, never the base table: it adds `bedrooms_norm` and
+# `has_flex_room` and is otherwise `SELECT listings.*`, so there is no reason to mix the two.
+# Requires migrations/002_listings_clean.sql — without it PostgREST answers
+# "Could not find the table public.listings_clean".
+LISTINGS = "listings_clean"
+
 
 def search_listings(
     project_id: str | None,
+    project_ids: list[str] | None,
     building_id: str | None,
     property_type: str | None,
     min_price_vnd: int | None,
     max_price_vnd: int | None,
     bedrooms: int | None,
+    min_bedrooms: int | None,
+    max_bedrooms: int | None,
+    min_area_m2: float | None,
+    max_area_m2: float | None,
     limit: int,
 ) -> list[dict]:
     """Filtered listing search, cheapest first. Every filter runs in SQL.
@@ -45,19 +60,41 @@ def search_listings(
     2-bedroom sits at index 144, so `bedrooms=2, limit=10` fetched the cheapest 30 rows,
     matched none of them and answered "no listings" over 251 real matches. Any post-fetch
     filter has this failure mode — over-fetching by a constant factor only moves the cliff.
+    Every filter added since then goes straight into the query for the same reason.
 
-    There is no `province` filter: `listings` has no province column. Resolve a province to
-    project ids via `locations` first (see the phase-2 `search_listings_by_province` item).
+    Bedroom filters match `bedrooms_norm` from the view, not the raw column. The raw column
+    called 139 studios "1 bedroom" and gave 126 shophouses a placeholder 1; the view reads the
+    count out of the listing title instead, which lifted studios from 188 to 379 and left the
+    non-residential rows NULL. A NULL is excluded by any bedroom filter, which is the point.
+
+    There is no `province` filter here because `listings` has no province column. Callers that
+    want one resolve it to project ids with `locations.project_ids_in_province` and pass them as
+    `project_ids` — that is what the search_listings_by_province tool does.
     """
-    q = get_client().table("listings_full").select(LISTING_CARD_COLUMNS)
+    q = get_client().table(LISTINGS).select(LISTING_CARD_COLUMNS)
     if project_id:
         q = q.eq("project_id", project_id)
+    if project_ids is not None:
+        # An empty list must not reach PostgREST: `in.()` is not a valid filter and the request
+        # would come back unfiltered, turning "no projects in that province" into "every
+        # listing we have". Callers should not send one, but the cost of being sure is a line.
+        if not project_ids:
+            return []
+        q = q.in_("project_id", project_ids)
     if building_id:
         q = q.eq("building_id", building_id)
     if property_type:
         q = q.eq("property_type", property_type)
     if bedrooms is not None:
-        q = q.eq("bedrooms", bedrooms)
+        q = q.eq("bedrooms_norm", bedrooms)
+    if min_bedrooms is not None:
+        q = q.gte("bedrooms_norm", min_bedrooms)
+    if max_bedrooms is not None:
+        q = q.lte("bedrooms_norm", max_bedrooms)
+    if min_area_m2 is not None:
+        q = q.gte("area_m2", min_area_m2)
+    if max_area_m2 is not None:
+        q = q.lte("area_m2", max_area_m2)
     if min_price_vnd is not None:
         q = q.gte("price_vnd", min_price_vnd)
     if max_price_vnd is not None:
@@ -70,7 +107,7 @@ def search_listings(
 def get_listing(listing_id: str) -> dict | None:
     rows = (
         get_client()
-        .table("listings_full")
+        .table(LISTINGS)
         .select(LISTING_DETAIL_COLUMNS)
         .eq("id", listing_id)
         .limit(1)
@@ -118,7 +155,7 @@ def list_by_project(project_id: str, limit: int, offset: int) -> dict:
 def _project_total(project_id: str) -> int:
     count = (
         get_client()
-        .table("listings_full")
+        .table(LISTINGS)
         .select("id", count="exact")
         .eq("project_id", project_id)
         .limit(1)
@@ -131,7 +168,7 @@ def _project_total(project_id: str) -> int:
 def _project_page(project_id: str, limit: int, offset: int):
     return (
         get_client()
-        .table("listings_full")
+        .table(LISTINGS)
         .select(LISTING_CARD_COLUMNS, count="exact")
         .eq("project_id", project_id)
         .order("price_vnd", desc=False)
@@ -152,7 +189,7 @@ def get_listing_ref(listing_id: str) -> dict | None:
     """
     rows = (
         get_client()
-        .table("listings_full")
+        .table(LISTINGS)
         .select("id,project_id")
         .eq("id", listing_id)
         .limit(1)
@@ -166,7 +203,7 @@ def get_many(listing_ids: list[str]) -> list[dict]:
     """Fetch several listings by id (used by compare)."""
     rows = (
         get_client()
-        .table("listings_full")
+        .table(LISTINGS)
         .select(LISTING_DETAIL_COLUMNS)
         .in_("id", listing_ids)
         .execute()
@@ -184,8 +221,8 @@ def project_price_stats(project_id: str) -> dict:
     """
     rows = (
         get_client()
-        .table("listings_full")
-        .select("price_vnd,price_per_m2_vnd,area_m2,property_type,bedrooms")
+        .table(LISTINGS)
+        .select("price_vnd,price_per_m2_vnd,area_m2,property_type,bedrooms_norm")
         .eq("project_id", project_id)
         .execute()
         .data
@@ -194,7 +231,9 @@ def project_price_stats(project_id: str) -> dict:
     prices = [r["price_vnd"] for r in rows if r.get("price_vnd") is not None]
     ppm2 = [r["price_per_m2_vnd"] for r in rows if r.get("price_per_m2_vnd") is not None]
     areas = [a for a in (to_float(r.get("area_m2")) for r in rows) if a is not None]
-    beds = [b for b in (to_int(r.get("bedrooms")) for r in rows) if b is not None]
+    # `bedrooms_norm`, not `bedrooms`: the SELECT above reads the listings_clean view, where the
+    # count is derived from the listing title. The raw column called 139 studios "1 bedroom".
+    beds = [b for b in (to_int(r.get("bedrooms_norm")) for r in rows) if b is not None]
     ptypes: dict[str, int] = {}
     for r in rows:
         pt = r.get("property_type") or "unknown"
@@ -230,7 +269,7 @@ def map_points(project_id: str | None, limit: int) -> list[dict]:
     """Lightweight lat/lng points for the map view (US5)."""
     q = (
         get_client()
-        .table("listings_full")
+        .table(LISTINGS)
         .select("id,title,property_type,price_vnd,lat,lng")
         .not_.is_("lat", "null")
         .not_.is_("lng", "null")
@@ -249,4 +288,3 @@ def map_points(project_id: str | None, limit: int) -> list[dict]:
         }
         for r in rows
     ]
-

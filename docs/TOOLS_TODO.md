@@ -220,15 +220,128 @@ DB hiện **chưa có bảng documents** và **pgvector chưa được cài**.
 - [ ] Bật tool lên: xóa dòng `mcp.disable(...)` trong `rag.py`.
 
 ### Lưu booking (nâng US2.1/US2.2 từ form-spec thành ghi thật)
-- [ ] Tạo bảng `bookings` `(id, project_id, kind, contact jsonb, preferred_time, note, created_at)`.
-- [ ] Thêm tool **`submit_booking(kind, project_id, payload)`** để validate rồi insert, trả về id xác
-      nhận. (Đây là thao tác *ghi* — cân nhắc RLS và rate-limit trước khi bật.)
+- [x] Tạo bảng `bookings` `(id, project_id, kind, contact jsonb, preferred_time, note, created_at)`.
+  - ✅ `migrations/003_bookings.sql`, đã chạy trên Supabase. Bảng rỗng, service-role đọc được,
+    PostgREST nhận diện (HTTP 200).
+  - 🔒 **Bảo mật khác hẳn hai bảng cũ** — đây là bảng duy nhất chứa dữ liệu cá nhân (họ tên,
+    số điện thoại, email của người thật), mà PostgREST thì tự phơi mọi bảng trong `public` ra
+    API. Khoá hai lớp: RLS bật **không kèm policy nào** (từ chối tất cả), **cộng** `REVOKE ALL
+    FROM anon, authenticated` ở tầng GRANT — nếu sau này ai lỡ thêm policy `USING (true)` thì
+    thiếu GRANT vẫn không đọc được. Một sơ suất không đủ để rò dữ liệu.
+  - ✅ Ràng buộc `bookings_guest_needs_phone`: khách vãng lai bắt buộc có số điện thoại.
+    Đã kiểm chứng bằng insert thiếu phone → bị chặn với lỗi `23514`. Form đánh dấu `phone`
+    required, ràng buộc này khiến quy tắc đó không lách được bằng insert trực tiếp.
+  - ✅ Thêm cột `is_authenticated` ngoài đặc tả: thiếu nó thì `contact` rỗng trở nên nhập nhằng
+    giữa "đã đăng nhập, liên hệ lấy từ hồ sơ" và "form lỗi, mất liên hệ".
+  - ✅ `preferred_time` để **nullable** dù form đánh dấu bắt buộc — "gọi tôi lúc nào cũng được"
+    là yêu cầu hợp lệ có thể xuất hiện sau. Ràng buộc DB chỉ nên khoá bất biến không bao giờ đổi.
+  - ⏳ **Khoá ngoại sang `locations` chưa làm** — `locations` không có PRIMARY KEY nên chưa tạo
+    FK được. Đã kiểm: 352 dòng / 352 id khác nhau / không NULL → thêm PK an toàn. Câu lệnh để
+    sẵn ở mục 4 của migration 003, tách riêng vì nó động vào bảng đang dùng.
+  - ⚠️ Chạy migration này **chưa bật tính năng ghi**. Hai tool form vẫn trả `persisted: false`
+    cho tới khi có `submit_booking` ở mục dưới.
+- [x] Thêm tool **`submit_booking(kind, project_id, payload, is_authenticated)`** để validate rồi
+      insert, trả về id xác nhận.
+  - ✅ Trả `{booking_id, kind, project, preferred_time, created_at, persisted: true,
+    duplicate_of_existing}`. Có `booking_id` rồi agent **mới được** nói với khách là đã ghi nhận.
+  - ✅ **Quy tắc validate đọc thẳng từ đặc tả form** (`_fields_for()` dùng chung cho cả
+    `start_visit_booking` lẫn `submit_booking`). Nếu ai đổi `email` thành bắt buộc, form và phần
+    kiểm tra dịch chuyển cùng nhau — không thể lệch cho tới lúc một booking lọt vào với trường
+    chẳng ai kiểm.
+  - ✅ **Trường lạ bị từ chối chứ không bị bỏ qua.** Agent bịa ra `ngan_sach` thì raise, vì âm
+    thầm bỏ khoá đó là vứt mất thứ người dùng đã gõ. Kiểm chứng: *"Unknown field(s) ngan_sach…"*.
+  - ✅ Kiểm SĐT (≥8 chữ số), email (có `@` và tên miền), `preferred_time` phải là ISO-8601 —
+    bắt ở Python để thông báo lỗi nói về *dữ liệu người dùng nhập*, không phải về cột và kiểu
+    của Postgres.
+  - 🔁 **Chống trùng thay cho rate-limit.** Yêu cầu y hệt (cùng `kind` + project + số điện thoại)
+    trong **10 phút** sẽ trả lại id cũ thay vì tạo dòng thứ hai, kèm cờ
+    `duplicate_of_existing=true`. Đây mới là rủi ro có thật: agent retry khi timeout, người dùng
+    bấm hai lần. Hai dòng nghĩa là bên bán gọi cho cùng một người hai lần về cùng một căn, mà
+    khách không có cách nào huỷ cái thừa. Kiểm chứng: gọi hai lần → cùng `booking_id`, DB có
+    đúng 1 dòng.
+    ⚠️ Chống trùng **không phải** rate-limit thật: nó không chặn 100 booking từ 100 số khác nhau.
+    Giới hạn tần suất đúng nghĩa thuộc về API gateway / lớp agent, không phải MCP server vốn
+    không giữ trạng thái giữa các lần gọi.
+  - ✅ RLS đã xử lý ở migration 003 (bật, không policy, `REVOKE` khỏi anon) — đã kiểm:
+    `rls_enabled=true · policy_count=0 · anon_grants=0`.
+  - ✅ Hai tool form nay trả thêm `"submit_tool": "submit_booking"` và docstring chỉ thẳng sang
+    đó; `persisted` vẫn là `false` vì bản thân chúng vẫn không ghi gì — chỉ khác là **đường ghi
+    giờ đã tồn tại** thay vì là việc của giai đoạn sau.
+  - Test: 5 test, có fixture tự dọn dòng đã ghi kể cả khi test đỏ (đây là test duy nhất trong bộ
+    có ghi, và ghi vào bảng chứa dữ liệu cá nhân).
 
 ### Nâng cấp chất lượng tìm kiếm
-- [ ] Chuẩn hóa các cột số của listing (generated column hoặc một view đã làm sạch) để
+- [x] Chuẩn hóa các cột số của listing (generated column hoặc một view đã làm sạch) để
       `bedrooms`/`area_m2` lọc theo khoảng được ở SQL, và bỏ phần lọc bằng Python trong
       `search_listings`.
-- [ ] Thêm **`search_listings_by_province(province, ...)`**: đổi tỉnh thành → danh sách project id
+  - ⚠️ **Tiền đề của mục này đã lỗi thời.** Mục được viết khi các cột số còn lưu dạng `text`.
+    DB hiện tại: `bedrooms` là `int`, `area_m2` là `float8`, nên **không cần** generated column
+    hay view để lọc theo khoảng — `gte`/`lte` chạy thẳng trong SQL.
+  - ✅ Phần lọc bằng Python đã bỏ từ lúc làm US1 (xem mục `search_listings` ở trên).
+  - ✅ Thêm `min_area_m2` / `max_area_m2` — trước đây **không hề có** bộ lọc diện tích nào.
+    Kiểm chứng: 50–70m² → trả về đúng dải, 80–120m² → 92 căn.
+  - ✅ Thêm `min_bedrooms` / `max_bedrooms` để diễn đạt "từ N phòng trở lên"; `bedrooms` cũ giữ
+    nguyên cho khớp chính xác.
+  - ✅ Khoảng ngược (`min > max`) nay raise `ToolError` nói rõ trường nào. Trước đây SQL trả rỗng
+    và agent hiểu thành "không có căn nào như vậy" thay vì "bạn hỏi một khoảng bất khả thi".
+  - 🐞 **Việc còn lại — và lý do thật sự cần view, khác hẳn lý do ghi trong mục này.**
+    Đối chiếu cột `bedrooms` với nhãn trong tiêu đề tin đăng:
+
+    | `bedrooms` | n | Tiêu đề thực sự nói gì |
+    |---:|---:|---|
+    | 0 | 188 | Studio 100% ✅ |
+    | **1** | **882** | **Studio 139 · 1PN 411 · 1PN+1 206 · khác 126** ⚠️ |
+    | 2 | 908 | 2PN 782 · 2PN+1 126 ✅ |
+    | 3 | 219 | 3PN 218 ✅ |
+
+    Studio bị mã hoá **hai kiểu**: 188 dòng ở `bedrooms=0` và 139 dòng nữa lẫn trong
+    `bedrooms=1`. Nên `search_listings(bedrooms=0)` chỉ tìm được 188 trên khoảng 327 căn studio,
+    còn `bedrooms=1` trả về 139 căn studio không phải một phòng ngủ. Từ 2PN trở lên thì sạch.
+    Cột `bedrooms_plus` cũng không cứu được: 300 dòng tiêu đề ghi trơn "1 PN" nhưng cờ vẫn bật.
+  - ✅ **Đã xử lý bằng `migrations/002_listings_clean.sql`** — view `listings_clean` suy
+    `bedrooms_norm` từ **tiêu đề tin đăng** thay vì tin cột số (93% số dòng đọc được từ tiêu đề;
+    không tiêu đề nào dùng chữ "phòng ngủ", luôn viết tắt "PN"). Kết quả đã chạy trên Supabase,
+    khớp chính xác dự đoán:
+
+    | `bedrooms_norm` | 0 | 1 | 2 | 3 | 4 | NULL |
+    |---|---:|---:|---:|---:|---:|---:|
+    | số dòng | **379** | 641 | 945 | 227 | 2 | 161 |
+
+    Studio nhảy từ 188 lên **379**; `bedrooms=1` không còn lẫn studio nào.
+  - ✅ **Không rơi về cột `bedrooms` khi tiêu đề im lặng → trả NULL.** 126/161 dòng còn lại là
+    shophouse/liền kề/thương mại đang mang `bedrooms=1` giả (`shophouse` 39/48,
+    `thuong_mai_dich_vu` 11/11). NULL nghĩa "chưa rõ", trung thực hơn số 1 sai — và NULL thì bị
+    mọi bộ lọc phòng ngủ loại ra, đúng ý muốn. Đánh đổi: mất 1 dòng `lien_ke` có `bedrooms=4`
+    thật mà tiêu đề không ghi.
+  - ✅ Thêm `has_flex_room` phân biệt "2 PN" với "2 PN + 1" (phòng đa năng, 344 dòng). Cột
+    `bedrooms_plus` sẵn có không dùng được: nó bật cả trên 300 dòng tiêu đề ghi trơn "1 PN".
+  - ✅ Dùng VIEW chứ không phải generated column: quy tắc suy từ tiêu đề còn phải chỉnh, view sửa
+    bằng `CREATE OR REPLACE` và không đụng dòng dữ liệu nào; generated column phải `ALTER TABLE`
+    toàn bảng và không lùi được.
+  - ✅ Index: `(price_vnd, id)` phục vụ cả sắp xếp lẫn phân trang — đáng giá nhất; thêm
+    `(project_id, price_vnd)`, `(area_m2)`, `(bedrooms)`.
+  - ✅ Mọi truy vấn listing nay đi qua view (hằng số `LISTINGS` trong service), cột thô `bedrooms`
+    **không còn được select** ở đâu cả.
+  - Test: 6 test mới (khoảng diện tích trong SQL, khoảng phòng ngủ, khoảng ngược raise,
+    `bedrooms` khớp tiêu đề, shophouse bị loại khỏi lọc phòng ngủ, `has_flex_room` khớp "+1").
+- [x] Thêm **`search_listings_by_province(province, ...)`**: đổi tỉnh thành → danh sách project id
+  - ✅ Hai bước: `locations.project_ids_in_province()` (khớp ILIKE, `level='project'`) → truyền
+    danh sách id vào `search_listings` qua tham số `project_ids` mới. Một chỗ dựng truy vấn
+    dùng chung, không nhân đôi logic lọc.
+  - ✅ Kiểm chứng: *Hà Nội · 2PN · dưới 4 tỷ* → 65 căn trải trên **4 project**, sắp theo giá tăng
+    dần xuyên suốt các project. Hồ Chí Minh → 626 căn/1 project; Hưng Yên → 149 căn/6 project.
+  - ⚠️ **Bẫy đã chặn**: nếu tỉnh không khớp project nào thì danh sách id rỗng, mà
+    `.in_("project_id", [])` **không phải bộ lọc hợp lệ** của PostgREST — request sẽ trả về
+    **toàn bộ listing**, biến "không có dự án ở tỉnh đó" thành "đây là mọi căn chúng tôi có".
+    Chặn hai lớp: tool raise `ToolError` kèm danh sách tỉnh có thật, và service trả `[]` sớm.
+  - ✅ 9/57 project không có `province` nên không tìm được qua đường này — nhưng **cả 9 đều có 0
+    listing**, nên bộ lọc tỉnh vẫn phủ đủ 2355 dòng (1577+626+149+2+1).
+  - ✅ Tách `_check_property_type` / `_check_ranges` dùng chung để hai tool không lệch nhau về
+    quy tắc validate.
+  - Test: 5 test (phủ đúng project trong tỉnh, trải nhiều project, các bộ lọc khác vẫn chạy,
+    tỉnh lạ raise, không phân biệt hoa thường).
+  - 💭 Cân nhắc thiết kế: gộp thành tham số `province` của `search_listings` sẽ gọn hơn — hai tool
+    trùng 8 tham số là chỗ agent dễ chọn nhầm. Giữ tool riêng vì đề bài ghi vậy.
       qua `locations`, rồi lọc listing (nhớ rằng: `listing` không có cột province).
 - [ ] Chuyển phần thống kê của `project_overview` sang Postgres RPC để không phải fetch mọi dòng.
 

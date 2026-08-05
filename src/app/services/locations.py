@@ -115,6 +115,33 @@ def list_project_nodes(project_id: str, level: str | None, limit: int) -> list[d
     return [shape_location(r) for r in rows]
 
 
+def project_ids_in_province(province: str) -> list[str]:
+    """Project ids sitting in a province — step one of a province-wide listing search.
+
+    `listings` has no province column, so the only route from a province to its listings runs
+    through here: resolve to project ids, then filter `listings.project_id`.
+
+    Matching is ILIKE-substring, same as search_projects, so case and partial names work but the
+    accented spelling is still required — `locations.province` is not accent-folded the way
+    `name_norm` is.
+
+    The 9 projects with no province recorded are unreachable this way, but all 9 have zero
+    listings, so a province search still covers all 2355 rows.
+    """
+    rows = (
+        get_client()
+        .table("locations")
+        .select("id")
+        .eq("level", "project")
+        .ilike("province", f"%{_sanitize(province)}%")
+        .limit(1000)
+        .execute()
+        .data
+        or []
+    )
+    return [r["id"] for r in rows]
+
+
 def list_provinces() -> list[str]:
     """Distinct provinces holding at least one project, in Vietnamese alphabetical order.
 

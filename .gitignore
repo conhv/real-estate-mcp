@@ -22,6 +22,11 @@ ENV/
 *.key
 secrets/
 
+# ---- Local dev harness (not part of the server) ----
+# chat_ui.py is a personal test UI that reads OPENAI_API_KEY from .env. Kept out of the repo
+# so the key never has a reason to travel with the code.
+chat_ui.py
+
 # ---- Tooling caches ----
 .pytest_cache/
 .ruff_cache/

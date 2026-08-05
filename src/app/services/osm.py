@@ -5,6 +5,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+
 def get_nearby_amenities(lat: float, lng: float, radius: int = 2000) -> list[dict[str, Any]]:
     """Fetch nearby amenities (schools, hospitals, parks, etc.) from OSM Overpass API.
     
@@ -71,6 +72,7 @@ def get_nearby_amenities(lat: float, lng: float, radius: int = 2000) -> list[dic
         # Sort by distance loosely (just return top 50 to avoid clutter)
         return amenities[:50]
         
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - Overpass is a third party; a map without amenities
+        # beats no map at all, so every failure degrades to an empty list.
         print(f"OSM Overpass API Error: {e}")
         return []

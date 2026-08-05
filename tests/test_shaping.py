@@ -47,7 +47,8 @@ class TestShapeListingCard:
             "id": "oh:XYZ",
             "title": "Căn 2PN",
             "area_m2": "72.3",  # text in DB
-            "bedrooms": "2",  # text in DB
+            "bedrooms_norm": "2",  # derived by the listings_clean view, not the raw column
+            "has_flex_room": True,
             "bathrooms": "2",  # text in DB
             "price_vnd": 3_000_000_000,  # bigint
             "status": "�ANG BÁN",  # corrupted
@@ -57,6 +58,7 @@ class TestShapeListingCard:
         card = shaping.shape_listing_card(raw)
         assert card["area_m2"] == 72.3
         assert card["bedrooms"] == 2
+        assert card["has_flex_room"] is True
         assert card["price_vnd"] == 3_000_000_000
         assert card["status"] == "ĐANG BÁN"
         # returns plain JSON-serializable dict
@@ -80,22 +82,26 @@ class TestShapeLocation:
 class TestProjectPriceStats:
     def test_stats_calculation(self):
         from unittest.mock import MagicMock, patch
+
         import app.services.listings as listing_svc
 
+        # `bedrooms_norm`, not `bedrooms`: project_price_stats reads the listings_clean view
+        # (migrations/002), where the count comes from the listing title. A mock keyed on the
+        # raw column would make bedrooms_range come back all-None and the assertion below fail.
         mock_rows = [
             {
                 "price_vnd": 3_000_000_000,
                 "price_per_m2_vnd": 50_000_000,
                 "area_m2": "60.0",
                 "property_type": "can_ho",
-                "bedrooms": "2",
+                "bedrooms_norm": "2",
             },
             {
                 "price_vnd": 5_000_000_000,
                 "price_per_m2_vnd": 62_500_000,
                 "area_m2": "80.0",
                 "property_type": "can_ho",
-                "bedrooms": "3",
+                "bedrooms_norm": "3",
             },
         ]
         with patch("app.services.listings.get_client") as mock_db:
