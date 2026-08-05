@@ -14,11 +14,28 @@ from __future__ import annotations
 import os
 
 import pytest
+from dotenv import load_dotenv
+
+# Load .env before the skip marker below reads the environment — otherwise credentials that live
+# only in .env are invisible here and every live-DB test silently skips.
+load_dotenv()
 
 
 def _has_db_creds() -> bool:
     return bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY"))
 
+
+def tool_data(result):
+    """Unwrap a tool's return value from a FastMCP ToolResult.
+
+    FastMCP 3.x exposes it on `.structured_content` (not `.data`), and wraps non-object returns
+    (lists, strings) in a `{"result": ...}` envelope per the MCP spec. Dict returns come through
+    as-is. This helper hides that difference from the tests.
+    """
+    content = result.structured_content
+    if isinstance(content, dict) and set(content) == {"result"}:
+        return content["result"]
+    return content
 
 # Skip marker applied to every live-DB test. Usage: @needs_db above the test.
 needs_db = pytest.mark.skipif(
