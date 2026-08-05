@@ -10,6 +10,17 @@ Note the data-quality realities of the `listing` table:
 
 from __future__ import annotations
 
+import os
+from typing import Any
+
+from ..constants import (
+    FURNISHING_MAP,
+    LEGAL_STATUS_MAP,
+    PROPERTY_TYPE_MAP,
+    USAGE_STATUS_MAP,
+    clean_sql_enum,
+    get_province_abbreviation,
+)
 from ..db import get_client
 from ..shaping import (
     LISTING_CARD_COLUMNS,
@@ -200,53 +211,112 @@ def get_listings_geo_bounds(listing_ids: list[str]) -> dict:
     if not listing_ids:
         return {"scope": "UNKNOWN", "items": [], "center": None, "bounds": None, "distance_matrix": []}
 
-    rows = (
-        get_client()
-        .table("listings")
-        .select("id, project_name, location_text, price_vnd, lat, lng, area_m2, title")
-        .in_("id", listing_ids)
-        .execute()
-        .data
-        or []
-    )
+    rows = []
+    try:
+        rows = (
+            get_client()
+            .table("listings")
+            .select(LISTING_DETAIL_COLUMNS)
+            .in_("id", listing_ids)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        pass
+
+    project_ids = list({r["project_id"] for r in rows if r.get("project_id")})
+    loc_map = {}
+    if project_ids:
+        try:
+            loc_rows = (
+                get_client()
+                .table("locations")
+                .select("id, name, province")
+                .in_("id", project_ids)
+                .execute()
+                .data
+                or []
+            )
+            loc_map = {l["id"]: l for l in loc_rows}
+        except Exception:
+            pass
 
     items = []
     lats, lngs = [], []
     provinces = set()
 
-    for r in rows:
+    for raw in rows:
+        r = shape_listing_detail(raw)
         lat = float(r.get("lat") or 0)
         lng = float(r.get("lng") or 0)
-        loc = r.get("location_text") or ""
+        proj_info = loc_map.get(r.get("project_id"), {})
+        proj_name = proj_info.get("name") or r.get("project_id") or "Dự án"
+        province = proj_info.get("province") or "Hà Nội"
 
-        prov_abbr = ""
-        if "Hà Nội" in loc or "HN" in loc:
-            prov_abbr = "HN"
-        elif "Hồ Chí Minh" in loc or "HCM" in loc:
-            prov_abbr = "HCM"
-        elif "Hải Phòng" in loc or "HP" in loc:
-            prov_abbr = "HP"
-        elif "Hưng Yên" in loc or "HY" in loc:
-            prov_abbr = "HY"
-        elif "Đà Nẵng" in loc or "ĐN" in loc:
-            prov_abbr = "ĐN"
+        prov_abbr = get_province_abbreviation(province)
 
-        provinces.add(prov_abbr or loc)
+        provinces.add(prov_abbr or province)
 
         if lat != 0 and lng != 0:
             lats.append(lat)
             lngs.append(lng)
 
+        price_num = (r.get("price_vnd") or 0) / 1000000000
+        area = r.get("area_m2")
+
+        ppm_num = r.get("price_per_m2_vnd")
+        if ppm_num:
+            ppm_text = f"{ppm_num / 1000000:.1f} Tr/m²"
+        elif price_num and area:
+            ppm_text = f"{(price_num * 1000 / area):.1f} Tr/m²"
+        else:
+            ppm_text = None
+
+        title_lower = (r.get("title") or "").lower()
+        is_studio = "studio" in title_lower
+        bd = r.get("bedrooms")
+        if bd is None and is_studio:
+            bd = 0
+
+        ba = r.get("bathrooms")
+
+        legal_text = clean_sql_enum(r.get("legal_status"), LEGAL_STATUS_MAP)
+        occ_text = clean_sql_enum(r.get("usage_status"), USAGE_STATUS_MAP)
+        int_text = clean_sql_enum(r.get("furnishing"), FURNISHING_MAP)
+        view_text = clean_sql_enum(r.get("view"))
+        prop_type = clean_sql_enum(r.get("property_type"), PROPERTY_TYPE_MAP)
+        direction_text = clean_sql_enum(r.get("direction_balcony"))
+        floor_text = clean_sql_enum(r.get("floor_band")) or (f"Tầng {r.get('floor_num')}" if r.get("floor_num") else None)
+
         items.append({
             "id": r.get("id"),
             "title": r.get("title"),
-            "project": r.get("project_name"),
-            "location": loc,
+            "name": r.get("title"),
+            "project": proj_name,
+            "location": province,
             "prov_abbr": prov_abbr,
             "lat": lat,
             "lng": lng,
             "price_vnd": r.get("price_vnd"),
-            "area_m2": r.get("area_m2"),
+            "priceNum": price_num,
+            "priceText": f"{price_num:.2f} Tỷ" if price_num > 0 else "Thỏa thuận",
+            "pricePerM2": ppm_text,
+            "area_m2": area,
+            "area": area,
+            "bedrooms": bd,
+            "bedrooms_plus": r.get("bedrooms_plus") or ("+1" in (r.get("title") or "")),
+            "bathrooms": ba,
+            "floor": floor_text,
+            "direction": direction_text,
+            "view": view_text,
+            "interior": int_text,
+            "legal": legal_text,
+            "occupancy": occ_text,
+            "property_type": prop_type,
+            "image": r.get("thumbnail"),
+            "thumbnail": r.get("thumbnail"),
+            "url": r.get("url"),
         })
 
     if not lats or not lngs:
@@ -299,8 +369,8 @@ def fetch_real_nearby_amenities(lat: float, lng: float) -> list[dict]:
     import os
     import httpx
 
-    api_key = os.environ.get("VIETMAP_API")
-    if not api_key or not lat or not lng:
+    api_key = (os.environ.get("VIETMAP_API") or "").strip()
+    if not api_key or api_key.startswith("your_") or not lat or not lng:
         return []
 
     categories = [
@@ -312,7 +382,8 @@ def fetch_real_nearby_amenities(lat: float, lng: float) -> list[dict]:
 
     amenities = []
     try:
-        with httpx.Client(timeout=4.0, verify=False) as client:
+        transport = httpx.HTTPTransport(verify=False)
+        with httpx.Client(timeout=1.0, transport=transport) as client:
             for c in categories:
                 url = "https://maps.vietmap.vn/api/autocomplete/v3"
                 params = {"apikey": api_key, "text": c["query"], "focus": f"{lat},{lng}"}
@@ -352,18 +423,8 @@ def compare_nearby_amenities(listing_ids: list[str]) -> dict:
         lat = item.get("lat")
         lng = item.get("lng")
 
-        # 1. Query live Vietmap POI API for real surrounding amenities
-        amenities = fetch_real_nearby_amenities(lat, lng)
-
-        # 2. Dynamic fallback if API key is missing or offline
-        if not amenities:
-            proj = item.get("project") or "khu vực"
-            amenities = [
-                {"category": "Bệnh viện", "name": f"Bệnh viện đa khoa gần {proj}", "distance_m": 450},
-                {"category": "Trường học", "name": f"Trường học liên cấp gần {proj}", "distance_m": 250},
-                {"category": "TTTM", "name": f"Trung tâm thương mại gần {proj}", "distance_m": 350},
-                {"category": "Công viên", "name": f"Công viên cây xanh gần {proj}", "distance_m": 180},
-            ]
+        api_key = (os.environ.get("VIETMAP_API") or "").strip()
+        amenities = fetch_real_nearby_amenities(lat, lng) if api_key and not api_key.startswith("your_") else []
 
         results.append({
             "id": item["id"],
