@@ -261,6 +261,26 @@ async def test_search_listings_in_project(mcp_server, sample_project_id):
 
 
 @needs_db
+async def test_listing_cards_carry_price_type(mcp_server):
+    """Every card showing `price_vnd` must also say what kind of price it is.
+
+    1264 of 2355 rows are priced by `estimate` (a figure the source computed) rather than
+    `asking`. A card without `price_type` invites the agent to quote an estimate as the
+    seller's price — the tool cannot do valuation, so it must not imply one.
+    """
+    for tool, args, unwrap in [
+        ("search_listings", {"limit": 25}, lambda d: d),
+        ("list_project_listings", {"project_id": "vhm:vinhomes-ocean-park", "limit": 25},
+         lambda d: d["listings"]),
+    ]:
+        cards = unwrap(tool_data(await mcp_server.call_tool(tool, args)))
+        assert cards, f"{tool} returned nothing"
+        for card in cards:
+            assert "price_type" in card, f"{tool} card is missing price_type"
+            assert card["price_type"] in ("asking", "estimate", None)
+
+
+@needs_db
 async def test_search_listings_bedrooms_filter_is_not_truncated(mcp_server):
     """Regression: the bedrooms filter must run in SQL, not over a fetched page.
 

@@ -35,9 +35,14 @@ def register(mcp: FastMCP) -> None:
         """Search property LISTINGS with filters. Use after the project is known (US1 results).
 
         Returns a list of listing cards {id, title, url, source, project_id, building_id,
-        property_type, area_m2, bedrooms, bathrooms, price_vnd, price_per_m2_vnd, status, lat,
-        lng, thumbnail}, cheapest first. An empty list means nothing matched the filters, not
-        that the search failed — offer to relax a filter rather than reporting an error.
+        property_type, area_m2, bedrooms, bathrooms, price_vnd, price_per_m2_vnd, price_type,
+        status, lat, lng, thumbnail}, cheapest first. An empty list means nothing matched the
+        filters, not that the search failed — offer to relax a filter rather than an error.
+
+        Read `price_type` on every card before quoting its `price_vnd`: "asking" is a price the
+        seller is asking, "estimate" (1264 of 2355 listings) is a figure the source computed and
+        nobody has asked for. Say which one you are quoting. Note the price filters below apply
+        to both kinds, so a price range mixes asked prices with estimated ones.
 
         How to present the result: 1-3 cards -> show them with the CTA buttons from
         listing_cta_actions; more than 3 -> summarise and offer a "xem tất cả" button backed by
@@ -84,21 +89,29 @@ def register(mcp: FastMCP) -> None:
 
         Returns one object with every card field (id, title, url, source, project_id,
         building_id, property_type, area_m2, bedrooms, bathrooms, price_vnd, price_per_m2_vnd,
-        status, lat, lng, thumbnail) plus the detail-only fields: floor_num, floor_band,
-        direction_balcony, view, legal_status, furnishing, usage_status, price_type, area_type,
+        price_type, status, lat, lng, thumbnail) plus the detail-only fields: floor_num,
+        floor_band, direction_balcony, view, legal_status, furnishing, usage_status, area_type,
         image_count, images, first_seen, last_seen, crawled_at. Raises if the id does not exist,
         so a returned object is always a real listing.
 
         Reading the result honestly:
-        - Many fields are genuinely missing in the source data (floor_num on 60% of listings,
-          bathrooms on 23%, view on 22%, legal_status on 12%). A null means "not recorded" —
-          say so instead of guessing or implying the feature is absent.
-        - `status` is either "ĐANG BÁN" or null; null means unknown, never "đã bán". Do not
-          tell the user a unit is still available on the strength of a null.
+        - CHECK `price_type` BEFORE QUOTING `price_vnd`. It is "asking" on 1091 listings (a real
+          price the seller is asking) but "estimate" on 1264 (a figure the source computed, that
+          nobody has asked for). Always say which one you are quoting — "giá chào bán" for
+          asking, "giá tham khảo do nguồn ước tính" for estimate. Presenting an estimate as an
+          asking price misstates what the unit costs, and this tool does not do valuation.
+        - The data is two catalogues stacked, and `source` tells you which row you are reading:
+          "vinhomes-market" carries status and floor_num but often lacks bathrooms/view;
+          "onehousing" carries bathrooms/view/floor_band but never status, and all of its prices
+          are estimates. So a null usually means "this source does not publish that field",
+          not "the unit lacks it" — say "chưa có thông tin" rather than guessing.
+        - `status` is either "ĐANG BÁN" or null; null means unknown, never "đã bán". Every
+          onehousing row is null here, so absence of status says nothing about availability.
         - `images` is capped at 40 URLs while `image_count` is the count at the source, so
           image_count > len(images) on about a third of listings. Cite len(images) for what you
           can actually show, and `url` for the full gallery.
-        - `price_type` is "asking" — the seller's asking price, not an appraisal.
+        - `area_type` is "thong_thuy" (carpet area) or "unknown"; every onehousing row is
+          "unknown", so price-per-m2 is not strictly comparable across the two sources.
 
         Args:
             listing_id: the `id` from a search result card, e.g. one returned by search_listings.
@@ -121,6 +134,9 @@ def register(mcp: FastMCP) -> None:
         the largest projects hold 685 and 623 listings, so a first page of 50 is a small slice.
         When `has_more` is true, fetch the next page by calling again with
         offset = offset + count. Raises if `project_id` is not a real project.
+
+        A page mixes both price kinds — check each card's `price_type` ("asking" vs "estimate")
+        before quoting it, and do not compare the two as if they were the same measurement.
 
         Args:
             project_id: a project id from search_projects / resolve_project.

@@ -11,16 +11,19 @@ from __future__ import annotations
 from typing import Any
 
 # Columns selected for a compact listing card (used in search results / lists).
+# `price_type` rides along with the price it qualifies: 1264 of 2355 rows price a unit by
+# `estimate` (a figure the source computed) rather than `asking`, and a card showing price_vnd
+# without it invites the agent to quote an estimate as the seller's price.
 LISTING_CARD_COLUMNS = (
     "id,title,url,source,project_id,building_id,property_type,area_m2,bedrooms,bathrooms,"
-    "price_vnd,price_per_m2_vnd,status,lat,lng,thumbnail"
+    "price_vnd,price_per_m2_vnd,price_type,status,lat,lng,thumbnail"
 )
 
 # Columns for a full listing detail view.
 LISTING_DETAIL_COLUMNS = (
     LISTING_CARD_COLUMNS
     + ",floor_num,floor_band,direction_balcony,view,legal_status,furnishing,usage_status,"
-    "price_type,area_type,image_count,images,first_seen,last_seen,crawled_at"
+    "area_type,image_count,images,first_seen,last_seen,crawled_at"
 )
 
 
@@ -75,6 +78,7 @@ def shape_listing_card(row: dict[str, Any]) -> dict[str, Any]:
         "bathrooms": to_int(row.get("bathrooms")),
         "price_vnd": row.get("price_vnd"),
         "price_per_m2_vnd": row.get("price_per_m2_vnd"),
+        "price_type": row.get("price_type"),  # "asking" vs "estimate" — never drop this
         "status": normalize_status(row.get("status")),
         "lat": row.get("lat"),
         "lng": row.get("lng"),
@@ -94,7 +98,6 @@ def shape_listing_detail(row: dict[str, Any]) -> dict[str, Any]:
             "legal_status": row.get("legal_status"),
             "furnishing": row.get("furnishing"),
             "usage_status": row.get("usage_status"),
-            "price_type": row.get("price_type"),
             "area_type": row.get("area_type"),
             "image_count": row.get("image_count"),
             "images": row.get("images") or [],
