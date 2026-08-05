@@ -275,7 +275,24 @@ DB hiện **chưa có bảng documents** và **pgvector chưa được cài**.
     **không còn được select** ở đâu cả.
   - Test: 6 test mới (khoảng diện tích trong SQL, khoảng phòng ngủ, khoảng ngược raise,
     `bedrooms` khớp tiêu đề, shophouse bị loại khỏi lọc phòng ngủ, `has_flex_room` khớp "+1").
-- [ ] Thêm **`search_listings_by_province(province, ...)`**: đổi tỉnh thành → danh sách project id
+- [x] Thêm **`search_listings_by_province(province, ...)`**: đổi tỉnh thành → danh sách project id
+  - ✅ Hai bước: `locations.project_ids_in_province()` (khớp ILIKE, `level='project'`) → truyền
+    danh sách id vào `search_listings` qua tham số `project_ids` mới. Một chỗ dựng truy vấn
+    dùng chung, không nhân đôi logic lọc.
+  - ✅ Kiểm chứng: *Hà Nội · 2PN · dưới 4 tỷ* → 65 căn trải trên **4 project**, sắp theo giá tăng
+    dần xuyên suốt các project. Hồ Chí Minh → 626 căn/1 project; Hưng Yên → 149 căn/6 project.
+  - ⚠️ **Bẫy đã chặn**: nếu tỉnh không khớp project nào thì danh sách id rỗng, mà
+    `.in_("project_id", [])` **không phải bộ lọc hợp lệ** của PostgREST — request sẽ trả về
+    **toàn bộ listing**, biến "không có dự án ở tỉnh đó" thành "đây là mọi căn chúng tôi có".
+    Chặn hai lớp: tool raise `ToolError` kèm danh sách tỉnh có thật, và service trả `[]` sớm.
+  - ✅ 9/57 project không có `province` nên không tìm được qua đường này — nhưng **cả 9 đều có 0
+    listing**, nên bộ lọc tỉnh vẫn phủ đủ 2355 dòng (1577+626+149+2+1).
+  - ✅ Tách `_check_property_type` / `_check_ranges` dùng chung để hai tool không lệch nhau về
+    quy tắc validate.
+  - Test: 5 test (phủ đúng project trong tỉnh, trải nhiều project, các bộ lọc khác vẫn chạy,
+    tỉnh lạ raise, không phân biệt hoa thường).
+  - 💭 Cân nhắc thiết kế: gộp thành tham số `province` của `search_listings` sẽ gọn hơn — hai tool
+    trùng 8 tham số là chỗ agent dễ chọn nhầm. Giữ tool riêng vì đề bài ghi vậy.
       qua `locations`, rồi lọc listing (nhớ rằng: `listing` không có cột province).
 - [ ] Chuyển phần thống kê của `project_overview` sang Postgres RPC để không phải fetch mọi dòng.
 

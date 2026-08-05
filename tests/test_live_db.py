@@ -455,6 +455,76 @@ async def test_search_listings_rejects_unknown_property_type(mcp_server):
 
 
 @needs_db
+async def test_search_by_province_covers_every_project_there(mcp_server):
+    """The two-step resolve must not lose projects on the way from province to listings."""
+    out = tool_data(await mcp_server.call_tool(
+        "search_listings_by_province", {"province": "Hà Nội", "limit": 200}
+    ))
+    assert out, "expected listings in Hà Nội"
+
+    in_province = {
+        p["id"] for p in tool_data(await mcp_server.call_tool(
+            "search_projects", {"province": "Hà Nội", "limit": 100}
+        ))
+    }
+    assert {c["project_id"] for c in out} <= in_province, (
+        "a card came back from a project that is not in the province"
+    )
+    prices = [c["price_vnd"] for c in out]
+    assert prices == sorted(prices), "results must be cheapest-first across projects"
+
+
+@needs_db
+async def test_search_by_province_spans_more_than_one_project(mcp_server):
+    """The point of the tool: it is not just search_listings with extra steps.
+
+    A province search has to reach every project there, not the first one it finds.
+    """
+    out = tool_data(await mcp_server.call_tool(
+        "search_listings_by_province", {"province": "Hà Nội", "limit": 200}
+    ))
+    assert len({c["project_id"] for c in out}) > 1
+
+
+@needs_db
+async def test_search_by_province_applies_the_other_filters(mcp_server):
+    """Filters must still run in SQL once the project list is resolved."""
+    out = tool_data(await mcp_server.call_tool(
+        "search_listings_by_province",
+        {"province": "Hà Nội", "bedrooms": 2, "max_price_vnd": 4_000_000_000, "limit": 100},
+    ))
+    assert out
+    assert all(c["bedrooms"] == 2 for c in out)
+    assert all(c["price_vnd"] <= 4_000_000_000 for c in out)
+
+
+@needs_db
+async def test_search_by_province_rejects_unknown_province(mcp_server):
+    """An unknown province must raise, never fall through to every listing we have.
+
+    `.in_("project_id", [])` is not a valid PostgREST filter; if the empty list reached the
+    query the request would come back unfiltered.
+    """
+    with pytest.raises(ToolError) as err:
+        await mcp_server.call_tool(
+            "search_listings_by_province", {"province": "Đà Nẵng"}
+        )
+    assert "Hà Nội" in str(err.value), "the error should name the provinces we do cover"
+
+
+@needs_db
+async def test_search_by_province_matches_case_insensitively(mcp_server):
+    """list_provinces returns accented names; typing them in lower case must still work."""
+    exact = tool_data(await mcp_server.call_tool(
+        "search_listings_by_province", {"province": "Hà Nội", "limit": 20}
+    ))
+    lowered = tool_data(await mcp_server.call_tool(
+        "search_listings_by_province", {"province": "hà nội", "limit": 20}
+    ))
+    assert [c["id"] for c in exact] == [c["id"] for c in lowered]
+
+
+@needs_db
 async def test_get_listing_detail(mcp_server, sample_listing_ids):
     res = await mcp_server.call_tool("get_listing", {"listing_id": sample_listing_ids[0]})
     listing = tool_data(res)

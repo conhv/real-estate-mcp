@@ -11,7 +11,8 @@ import pytest
 EXPECTED_ENABLED_TOOLS = {
     # US1
     "search_projects", "resolve_project", "list_project_buildings", "list_provinces",
-    "search_listings", "get_listing", "list_project_listings", "listing_cta_actions",
+    "search_listings", "search_listings_by_province", "get_listing", "list_project_listings",
+    "listing_cta_actions",
     # US6 / US4 / US5
     "compare_listings", "project_overview", "map_listings",
     # US2.1 / US2.2

@@ -40,6 +40,7 @@ LISTINGS = "listings_clean"
 
 def search_listings(
     project_id: str | None,
+    project_ids: list[str] | None,
     building_id: str | None,
     property_type: str | None,
     min_price_vnd: int | None,
@@ -65,12 +66,20 @@ def search_listings(
     count out of the listing title instead, which lifted studios from 188 to 379 and left the
     non-residential rows NULL. A NULL is excluded by any bedroom filter, which is the point.
 
-    There is no `province` filter: `listings` has no province column. Resolve a province to
-    project ids via `locations` first (see the phase-2 `search_listings_by_province` item).
+    There is no `province` filter here because `listings` has no province column. Callers that
+    want one resolve it to project ids with `locations.project_ids_in_province` and pass them as
+    `project_ids` — that is what the search_listings_by_province tool does.
     """
     q = get_client().table(LISTINGS).select(LISTING_CARD_COLUMNS)
     if project_id:
         q = q.eq("project_id", project_id)
+    if project_ids is not None:
+        # An empty list must not reach PostgREST: `in.()` is not a valid filter and the request
+        # would come back unfiltered, turning "no projects in that province" into "every
+        # listing we have". Callers should not send one, but the cost of being sure is a line.
+        if not project_ids:
+            return []
+        q = q.in_("project_id", project_ids)
     if building_id:
         q = q.eq("building_id", building_id)
     if property_type:
