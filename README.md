@@ -1,38 +1,38 @@
 # Real Estate MCP
 
-A [FastMCP](https://gofastmcp.com) server that exposes real-estate market-intelligence tools over
-the Model Context Protocol (MCP), backed by Supabase Postgres. Built so a LangGraph/agent layer can
-call these tools later (see `docs/PRD_LeDuyHung.pdf`).
+Một server [FastMCP](https://gofastmcp.com) cung cấp các công cụ phân tích thị trường bất động sản
+qua Model Context Protocol (MCP), lấy dữ liệu từ Supabase Postgres. Được xây dựng để lớp
+LangGraph/agent sau này gọi các công cụ này (xem `docs/PRD_LeDuyHung.pdf`).
 
-## Quick start
+## Bắt đầu nhanh
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .
-Copy-Item .env.example .env   # then fill in SUPABASE_SERVICE_ROLE_KEY
-.\.venv\Scripts\python.exe -m app        # stdio (local MCP clients)
+Copy-Item .env.example .env   # sau đó điền SUPABASE_SERVICE_ROLE_KEY
+.\.venv\Scripts\python.exe -m app        # stdio (cho MCP client chạy cục bộ)
 ```
 
-For agent deployment over HTTP, set `MCP_TRANSPORT=http` in `.env` and run the same command; the
-agent connects to `http://<host>:<port>/mcp`.
+Để triển khai cho agent qua HTTP, đặt `MCP_TRANSPORT=http` trong `.env` rồi chạy cùng lệnh trên;
+agent kết nối tới `http://<host>:<port>/mcp`.
 
-## Layout
+## Cấu trúc
 
 ```
 src/app/
-  server.py        # the single `mcp` instance + main()
-  config.py        # env-based config (no secrets in code)
-  db.py            # cached Supabase client
-  shaping.py       # row -> agent-facing dict (coerces text-typed numbers, fixes status mojibake)
-  services/        # all DB access (locations, listings)
-  tools/           # @mcp.tool definitions grouped by user story (thin wrappers over services)
+  server.py        # instance `mcp` duy nhất + main()
+  config.py        # cấu hình từ biến môi trường (không để secret trong code)
+  db.py            # Supabase client được cache
+  shaping.py       # row -> dict cho agent (ép kiểu số lưu dạng text, sửa lỗi mã hóa status)
+  services/        # toàn bộ truy cập DB (locations, listings)
+  tools/           # định nghĩa @mcp.tool nhóm theo user story (lớp bọc mỏng trên services)
 ```
 
-## Docs
-- `docs/SCHEMA.md` — the real database schema + gotchas.
-- `docs/PLAN.md` — architecture, approach, and phased implementation strategy.
-- `docs/TOOLS_TODO.md` — the student-facing implementation checklist (what to build, per tool).
+## Tài liệu
+- `docs/SCHEMA.md` — schema thật của database + các điểm cần lưu ý.
+- `docs/PLAN.md` — kiến trúc, hướng tiếp cận và chiến lược triển khai theo từng giai đoạn.
+- `docs/TOOLS_TODO.md` — checklist triển khai dành cho học viên (cần xây gì, cho từng tool).
 
-## Skills (for Claude Code)
-- `.claude/skills/fastmcp` — how to build/run/test FastMCP tools here.
-- `.claude/skills/supabase-access` — the Supabase client/query pattern used by the tools.
+## Skills (dành cho Claude Code)
+- `.claude/skills/fastmcp` — cách xây/chạy/kiểm thử các FastMCP tool trong dự án này.
+- `.claude/skills/supabase-access` — mẫu Supabase client/query mà các tool đang dùng.
