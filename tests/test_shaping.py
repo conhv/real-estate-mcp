@@ -81,7 +81,8 @@ class TestShapeListingCard:
             "id": "oh:XYZ",
             "title": "Căn 2PN",
             "area_m2": "72.3",  # text in DB
-            "bedrooms": "2",  # text in DB
+            "bedrooms_norm": "2",  # derived by the listings_clean view, not the raw column
+            "has_flex_room": True,
             "bathrooms": "2",  # text in DB
             "price_vnd": 3_000_000_000,  # bigint
             "status": "�ANG BÁN",  # corrupted
@@ -91,6 +92,7 @@ class TestShapeListingCard:
         card = shaping.shape_listing_card(raw)
         assert card["area_m2"] == 72.3
         assert card["bedrooms"] == 2
+        assert card["has_flex_room"] is True
         assert card["price_vnd"] == 3_000_000_000
         assert card["status"] == "ĐANG BÁN"
         # returns plain JSON-serializable dict
@@ -147,4 +149,43 @@ class TestComputeComparisonInsights:
         assert "cheapest_price" in hl["item1"]
         assert "largest_area" in hl["item2"]
         assert "lowest_price_per_m2" in hl["item2"]
+
+
+class TestProjectPriceStats:
+    def test_stats_calculation(self):
+        from unittest.mock import MagicMock, patch
+
+        import app.services.listings as listing_svc
+
+        # `bedrooms_norm`, not `bedrooms`: project_price_stats reads the listings_clean view
+        # (migrations/002), where the count comes from the listing title. A mock keyed on the
+        # raw column would make bedrooms_range come back all-None and the assertion below fail.
+        mock_rows = [
+            {
+                "price_vnd": 3_000_000_000,
+                "price_per_m2_vnd": 50_000_000,
+                "area_m2": "60.0",
+                "property_type": "can_ho",
+                "bedrooms_norm": "2",
+            },
+            {
+                "price_vnd": 5_000_000_000,
+                "price_per_m2_vnd": 62_500_000,
+                "area_m2": "80.0",
+                "property_type": "can_ho",
+                "bedrooms_norm": "3",
+            },
+        ]
+        with patch("app.services.listings.get_client") as mock_db:
+            mock_table = MagicMock()
+            mock_db.return_value.table.return_value = mock_table
+            mock_table.select.return_value.eq.return_value.execute.return_value.data = mock_rows
+
+            stats = listing_svc.project_price_stats("oh:amber-riverside")
+            assert stats["count"] == 2
+            assert stats["price_vnd"] == {"min": 3_000_000_000, "max": 5_000_000_000, "avg": 4_000_000_000}
+            assert stats["price_per_m2_vnd"] == {"min": 50_000_000, "max": 62_500_000, "avg": 56_250_000}
+            assert stats["area_m2"] == {"min": 60.0, "max": 80.0, "avg": 70.0}
+            assert stats["bedrooms_range"] == {"min": 2, "max": 3}
+            assert stats["by_property_type"] == {"can_ho": 2}
 
