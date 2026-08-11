@@ -543,8 +543,8 @@ async def test_get_listing_returns_every_documented_field(mcp_server, sample_lis
         "get_listing", {"listing_id": sample_listing_ids[0]}
     ))
     expected = {
-        "id", "title", "url", "source", "project_id", "building_id", "property_type",
-        "area_m2", "bedrooms", "has_flex_room", "bathrooms", "price_vnd", "price_per_m2_vnd",
+        "id", "title", "url", "source", "project_id", "cluster_id", "building_id", "property_type",
+        "area_m2", "bedrooms", "bedrooms_plus", "has_flex_room", "bathrooms", "price_vnd", "price_per_m2_vnd",
         "status",
         "lat", "lng", "thumbnail", "floor_num", "floor_band", "direction_balcony", "view",
         "legal_status", "furnishing", "usage_status", "price_type", "area_type",
