@@ -265,7 +265,14 @@ def project_price_stats(project_id: str) -> dict:
     }
 
 
-def map_points(project_id: str | None, limit: int) -> list[dict]:
+def map_points(
+    project_id: str | None,
+    property_type: str | None,
+    min_price_vnd: int | None,
+    max_price_vnd: int | None,
+    bedrooms: int | None,
+    limit: int
+) -> list[dict]:
     """Lightweight lat/lng points for the map view (US5)."""
     q = (
         get_client()
@@ -276,6 +283,14 @@ def map_points(project_id: str | None, limit: int) -> list[dict]:
     )
     if project_id:
         q = q.eq("project_id", project_id)
+    if property_type:
+        q = q.eq("property_type", property_type)
+    if bedrooms is not None:
+        q = q.eq("bedrooms_norm", bedrooms)
+    if min_price_vnd is not None:
+        q = q.gte("price_vnd", min_price_vnd)
+    if max_price_vnd is not None:
+        q = q.lte("price_vnd", max_price_vnd)
     rows = q.limit(limit).execute().data or []
     return [
         {
