@@ -508,57 +508,21 @@ def get_listings_geo_bounds(listing_ids: list[str]) -> dict:
     }
 
 
-def fetch_real_nearby_amenities(lat: float, lng: float) -> list[dict]:
-    """Query live Vietmap Autocomplete/Search API for real POIs (hospitals, schools, malls, parks)."""
-    import os
-    import httpx
+def fetch_real_nearby_amenities(lat: float, lng: float, profile: str = "driving") -> list[dict]:
+    """Query nearby amenities directly from UC5's OSM service and measure road commute via OSRM."""
+    from . import osm as osm_svc
 
-    api_key = (os.environ.get("VIETMAP_API") or "").strip()
-    if not api_key or api_key.startswith("your_") or not lat or not lng:
+    if not lat or not lng:
         return []
 
-    categories = [
-        {"cat": "Trường học", "query": "Trường"},
-        {"cat": "Bệnh viện", "query": "Bệnh viện"},
-        {"cat": "TTTM", "query": "Vincom"},
-        {"cat": "Công viên", "query": "Công viên"},
-    ]
-
-    amenities = []
     try:
-        transport = httpx.HTTPTransport(verify=False)
-        with httpx.Client(timeout=1.0, transport=transport) as client:
-            for c in categories:
-                url = "https://maps.vietmap.vn/api/autocomplete/v3"
-                params = {"apikey": api_key, "text": c["query"], "focus": f"{lat},{lng}"}
-                resp = client.get(url, params=params)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data and isinstance(data, list) and len(data) > 0:
-                        first = data[0]
-                        name = first.get("name") or first.get("display") or c["query"]
-                        dist_m = first.get("distance")
-                        if dist_m is None:
-                            poi_lat = first.get("lat")
-                            poi_lng = first.get("lng")
-                            if poi_lat and poi_lng:
-                                dist_m = int(_haversine_distance_km(lat, lng, float(poi_lat), float(poi_lng)) * 1000)
-                            else:
-                                dist_m = 300
-
-                        amenities.append({
-                            "category": c["cat"],
-                            "name": name,
-                            "distance_m": int(dist_m),
-                        })
+        return osm_svc.fetch_nearby_amenities_with_commute(lat, lng, profile=profile)
     except Exception:
-        pass
-
-    return amenities
+        return []
 
 
-def compare_nearby_amenities(listing_ids: list[str]) -> dict:
-    """Return objective side-by-side nearby amenity distance stats querying live Vietmap API or Geo POI engine."""
+def compare_nearby_amenities(listing_ids: list[str], profile: str = "driving") -> dict:
+    """Return objective side-by-side nearby amenity distance & duration stats querying OSM and OSRM."""
     bounds_data = get_listings_geo_bounds(listing_ids)
     items = bounds_data.get("items", [])
 
@@ -567,8 +531,7 @@ def compare_nearby_amenities(listing_ids: list[str]) -> dict:
         lat = item.get("lat")
         lng = item.get("lng")
 
-        api_key = (os.environ.get("VIETMAP_API") or "").strip()
-        amenities = fetch_real_nearby_amenities(lat, lng) if api_key and not api_key.startswith("your_") else []
+        amenities = fetch_real_nearby_amenities(lat, lng, profile=profile) if lat and lng else []
 
         results.append({
             "id": item["id"],

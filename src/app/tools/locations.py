@@ -111,3 +111,56 @@ def register(mcp: FastMCP) -> None:
         the user these are the only places we have projects.
         """
         return svc.list_provinces()
+
+    @mcp.tool
+    def calculate_commute_matrix(
+        origins: list[dict],
+        destinations: list[dict],
+        vehicle: str = "motorcycle",
+    ) -> dict:
+        """Calculate exact travel distance (meters) and duration (minutes/seconds) on OpenStreetMap (OSRM) road network.
+
+        Use when comparing commute times from multiple properties to a workplace, school, or landmark ("đi xe máy từ 4 căn đến trường mất bao lâu?").
+
+        Args:
+            origins: List of origin points, each dict containing {"lat": float, "lng": float, "label": str (optional)}.
+            destinations: List of destination points, each dict containing {"lat": float, "lng": float, "label": str (optional)}.
+            vehicle: Travel profile: "motorcycle" (default), "car", "bike", or "foot".
+
+        Returns:
+            Dict containing "status", "vehicle", "distances_m", "durations_s", and structured "matrix" with exact km & minutes for every origin-destination pair.
+        """
+        from ..services import osm as osm_svc
+
+        origin_coords = [(float(o["lat"]), float(o["lng"])) for o in origins if "lat" in o and "lng" in o]
+        dest_coords = [(float(d["lat"]), float(d["lng"])) for d in destinations if "lat" in d and "lng" in d]
+
+        if not origin_coords or not dest_coords:
+            raise ToolError("origins and destinations must contain valid lat/lng coordinates.")
+
+        profile_map = {
+            "motorcycle": "driving",
+            "car": "driving",
+            "driving": "driving",
+            "foot": "walking",
+            "walking": "walking",
+            "bike": "cycling",
+            "cycling": "cycling",
+        }
+        profile = profile_map.get(vehicle.lower().strip(), "driving")
+
+        res = osm_svc.calculate_osrm_matrix(origin_coords, dest_coords, profile=profile)
+        if res.get("status") == "error":
+            raise ToolError(res.get("message", "Failed to calculate matrix"))
+
+        res["vehicle"] = vehicle
+        matrix = res.get("matrix", [])
+        for i, o in enumerate(origins):
+            for j, d in enumerate(destinations):
+                if i < len(matrix) and j < len(matrix[i]):
+                    matrix[i][j]["origin"] = o.get("label") or f"Origin #{i+1}"
+                    matrix[i][j]["destination"] = d.get("label") or f"Destination #{j+1}"
+
+        return res
+
+
