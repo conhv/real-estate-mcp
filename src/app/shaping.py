@@ -33,17 +33,19 @@ LISTING_DETAIL_COLUMNS = (
 )
 
 
-def to_float(value: Any) -> float | None:
-    """Coerce a text/number field to float, tolerating commas and stray whitespace."""
+def to_float(value: Any) -> float | int | None:
+    """Coerce a text/number field to float/int, omitting trailing .0 for whole numbers."""
     if value is None:
         return None
     if isinstance(value, (int, float)):
-        return float(value)
+        f = float(value)
+        return int(f) if f.is_integer() else round(f, 1)
     text = str(value).strip().replace(",", "")
     if not text:
         return None
     try:
-        return float(text)
+        f = float(text)
+        return int(f) if f.is_integer() else round(f, 1)
     except ValueError:
         return None
 
@@ -98,6 +100,8 @@ def shape_listing_card(row: dict[str, Any]) -> dict[str, Any]:
 def shape_listing_detail(row: dict[str, Any]) -> dict[str, Any]:
     """Full detail view for a single listing."""
     card = shape_listing_card(row)
+    if row.get("bedrooms_plus"):
+        card["has_flex_room"] = True
     card.update(
         {
             "floor_num": to_int(row.get("floor_num")),
@@ -131,3 +135,74 @@ def shape_location(row: dict[str, Any]) -> dict[str, Any]:
         "lat": row.get("lat"),
         "lng": row.get("lng"),
     }
+
+
+def compute_comparison_insights(listings: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute context evaluation, deltas, and badges/highlights across compared listings."""
+    if not listings:
+        return {
+            "context": {"same_project": True, "same_province": True, "projects": [], "provinces": []},
+            "deltas": {},
+            "highlights": {},
+        }
+
+    projects = sorted(list({l.get("project_id") for l in listings if l.get("project_id")}))
+    provinces = sorted(list({l.get("province") for l in listings if l.get("province")}))
+
+    same_project = len(projects) <= 1
+    same_province = len(provinces) <= 1
+
+    prices = [l["price_vnd"] for l in listings if l.get("price_vnd") is not None]
+    price_per_m2s = [l["price_per_m2_vnd"] for l in listings if l.get("price_per_m2_vnd") is not None]
+    areas = [l["area_m2"] for l in listings if l.get("area_m2") is not None]
+    bedrooms = [l["bedrooms"] for l in listings if l.get("bedrooms") is not None]
+
+    deltas = {
+        "price_vnd": {
+            "min": min(prices) if prices else None,
+            "max": max(prices) if prices else None,
+            "diff": (max(prices) - min(prices)) if len(prices) >= 2 else 0,
+        },
+        "price_per_m2_vnd": {
+            "min": min(price_per_m2s) if price_per_m2s else None,
+            "max": max(price_per_m2s) if price_per_m2s else None,
+            "diff": (max(price_per_m2s) - min(price_per_m2s)) if len(price_per_m2s) >= 2 else 0,
+        },
+        "area_m2": {
+            "min": min(areas) if areas else None,
+            "max": max(areas) if areas else None,
+            "diff": round(max(areas) - min(areas), 2) if len(areas) >= 2 else 0.0,
+        },
+    }
+
+    highlights: dict[str, list[str]] = {l["id"]: [] for l in listings if l.get("id")}
+
+    min_price = min(prices) if prices else None
+    min_ppm2 = min(price_per_m2s) if price_per_m2s else None
+    max_area = max(areas) if areas else None
+    max_bed = max(bedrooms) if bedrooms else None
+
+    for l in listings:
+        lid = l.get("id")
+        if not lid:
+            continue
+        if min_price is not None and l.get("price_vnd") == min_price:
+            highlights[lid].append("cheapest_price")
+        if min_ppm2 is not None and l.get("price_per_m2_vnd") == min_ppm2:
+            highlights[lid].append("lowest_price_per_m2")
+        if max_area is not None and l.get("area_m2") == max_area:
+            highlights[lid].append("largest_area")
+        if max_bed is not None and l.get("bedrooms") == max_bed:
+            highlights[lid].append("most_bedrooms")
+
+    return {
+        "context": {
+            "same_project": same_project,
+            "same_province": same_province,
+            "projects": projects,
+            "provinces": provinces,
+        },
+        "deltas": deltas,
+        "highlights": highlights,
+    }
+

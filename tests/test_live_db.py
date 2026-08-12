@@ -606,6 +606,12 @@ async def test_compare_listings(mcp_server, sample_listing_ids):
     out = tool_data(res)
     assert len(out["listings"]) == 2
     assert "fields" in out
+    assert "context" in out
+    assert "deltas" in out
+    assert "highlights" in out
+    assert isinstance(out["context"]["same_project"], bool)
+    assert isinstance(out["deltas"]["price_vnd"], dict)
+
 
 
 @needs_db
