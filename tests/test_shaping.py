@@ -51,9 +51,8 @@ class TestShapeListingDetail:
         raw = {
             "id": "vhm:123",
             "title": "Căn hộ 2PN+1",
-            "cluster_id": "vhm:the-origami",
-            "bedrooms": "2",
-            "bedrooms_plus": True,
+            "bedrooms_norm": "2",
+            "has_flex_room": True,
             "bathrooms": 2,
             "floor_num": "12",
             "floor_band": "tang_trung",
@@ -66,8 +65,7 @@ class TestShapeListingDetail:
             "area_m2": 63.5,
         }
         detail = shaping.shape_listing_detail(raw)
-        assert detail["cluster_id"] == "vhm:the-origami"
-        assert detail["bedrooms_plus"] is True
+        assert detail["has_flex_room"] is True
         assert detail["floor_num"] == 12
         assert detail["floor_band"] == "tang_trung"
         assert detail["direction_balcony"] == "Đông Nam"

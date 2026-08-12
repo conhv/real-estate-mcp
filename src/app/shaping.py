@@ -100,10 +100,10 @@ def shape_listing_card(row: dict[str, Any]) -> dict[str, Any]:
 def shape_listing_detail(row: dict[str, Any]) -> dict[str, Any]:
     """Full detail view for a single listing."""
     card = shape_listing_card(row)
+    if row.get("bedrooms_plus"):
+        card["has_flex_room"] = True
     card.update(
         {
-            "cluster_id": row.get("cluster_id"),
-            "bedrooms_plus": row.get("bedrooms_plus"),
             "floor_num": to_int(row.get("floor_num")),
             "floor_band": row.get("floor_band"),
             "direction_balcony": row.get("direction_balcony"),

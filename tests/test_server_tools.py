@@ -15,8 +15,8 @@ EXPECTED_ENABLED_TOOLS = {
     "listing_cta_actions",
     # US6 / US4 / US5
     "compare_listings", "project_overview", "map_listings",
-    # US5 Map & Geo comparison tools
-    "get_listings_geo_bounds", "compare_nearby_amenities",
+    # US5 Map & US6 Geo comparison tools (OpenStreetMap & OSRM)
+    "get_listings_geo_bounds", "compare_nearby_amenities", "calculate_commute_matrix",
     # US2.1 / US2.2
     "start_visit_booking", "start_consultation", "submit_booking",
 }
@@ -51,6 +51,7 @@ async def test_every_tool_has_a_description(mcp_server):
         ("compare_listings", "listing_ids"),
         ("get_listings_geo_bounds", "listing_ids"),
         ("compare_nearby_amenities", "listing_ids"),
+        ("calculate_commute_matrix", "origins"),
         ("project_overview", "project_id"),
         ("start_visit_booking", "project_id"),
     ],
