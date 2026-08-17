@@ -33,7 +33,10 @@ def register(mcp: FastMCP) -> None:
         max_price_vnd: int | None = None,
         bedrooms: int | None = None,
         limit: int = 200, 
-        include_amenities: bool = False
+        include_amenities: bool = False,
+        listing_ids: list[str] | None = None,
+        min_bedrooms: int | None = None,
+        max_bedrooms: int | None = None
     ) -> dict:
         """Geo points for the map view (US5): listings with lat/lng, and optionally surrounding amenities.
 
@@ -47,7 +50,10 @@ def register(mcp: FastMCP) -> None:
             min_price_vnd=min_price_vnd,
             max_price_vnd=max_price_vnd,
             bedrooms=bedrooms,
-            limit=limit
+            limit=limit,
+            listing_ids=listing_ids,
+            min_bedrooms=min_bedrooms,
+            max_bedrooms=max_bedrooms
         )
         res = {"count": len(points), "points": points}
         

@@ -301,22 +301,45 @@ def map_points(
     min_price_vnd: int | None,
     max_price_vnd: int | None,
     bedrooms: int | None,
-    limit: int
+    limit: int,
+    listing_ids: list[str] | None = None,
+    min_bedrooms: int | None = None,
+    max_bedrooms: int | None = None
 ) -> list[dict]:
     """Lightweight lat/lng points for the map view (US5)."""
-    q = (
+    base_q = (
         get_client()
         .table(LISTINGS)
         .select("id,title,property_type,price_vnd,lat,lng")
         .not_.is_("lat", "null")
         .not_.is_("lng", "null")
     )
+    
+    if listing_ids:
+        rows = base_q.in_("id", listing_ids).limit(limit).execute().data or []
+        if rows:
+            return rows
+        
+        # Fallback to project_id if the specific listings have no lat/lng
+        base_q = (
+            get_client()
+            .table(LISTINGS)
+            .select("id,title,property_type,price_vnd,lat,lng")
+            .not_.is_("lat", "null")
+            .not_.is_("lng", "null")
+        )
+
+    q = base_q
     if project_id:
         q = q.eq("project_id", project_id)
     if property_type:
         q = q.eq("property_type", property_type)
     if bedrooms is not None:
         q = q.eq("bedrooms_norm", bedrooms)
+    if min_bedrooms is not None:
+        q = q.gte("bedrooms_norm", min_bedrooms)
+    if max_bedrooms is not None:
+        q = q.lte("bedrooms_norm", max_bedrooms)
     if min_price_vnd is not None:
         q = q.gte("price_vnd", min_price_vnd)
     if max_price_vnd is not None:
