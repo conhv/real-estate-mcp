@@ -26,14 +26,35 @@ def register(mcp: FastMCP) -> None:
         return {"project": project, "stats": listing_svc.project_price_stats(project_id)}
 
     @mcp.tool
-    def map_listings(project_id: str | None = None, limit: int = 200, include_amenities: bool = False) -> dict:
+    def map_listings(
+        project_id: str | None = None,
+        property_type: str | None = None,
+        min_price_vnd: int | None = None,
+        max_price_vnd: int | None = None,
+        bedrooms: int | None = None,
+        limit: int = 200, 
+        include_amenities: bool = False,
+        listing_ids: list[str] | None = None,
+        min_bedrooms: int | None = None,
+        max_bedrooms: int | None = None
+    ) -> dict:
         """Geo points for the map view (US5): listings with lat/lng, and optionally surrounding amenities.
 
         Use for "xem bản đồ". Optionally scope to one project. 
         Set include_amenities=True ONLY when the user explicitly asks for amenities or POIs nearby.
         Returns {"count": n, "points": [{id, title, property_type, price_vnd, lat, lng}], "amenities": [...]}.
         """
-        points = listing_svc.map_points(project_id=project_id, limit=limit)
+        points = listing_svc.map_points(
+            project_id=project_id,
+            property_type=property_type,
+            min_price_vnd=min_price_vnd,
+            max_price_vnd=max_price_vnd,
+            bedrooms=bedrooms,
+            limit=limit,
+            listing_ids=listing_ids,
+            min_bedrooms=min_bedrooms,
+            max_bedrooms=max_bedrooms
+        )
         res = {"count": len(points), "points": points}
         
         if include_amenities and points:

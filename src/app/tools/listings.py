@@ -7,6 +7,7 @@ from fastmcp.exceptions import ToolError
 
 from ..services import listings as svc
 from ..services import locations as loc_svc
+from ..shaping import compute_comparison_insights
 
 # Known property types in the data (US1 filtering). Vietnamese slugs as stored.
 PROPERTY_TYPES = (
@@ -265,12 +266,18 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool
     def compare_listings(listing_ids: list[str]) -> dict:
-        """Compare 2-4 listings side by side (US6).
+        """Compare 2-4 listings side by side with calculated insights (US6).
 
-        Use when the user wants to compare specific units. Pass their ids (same project or same
-        province). Returns {"listings": [...full details...], "fields": [...]} where `fields` names
-        the key comparison attributes so the UI can render a comparison table. Raises if <2 ids or
-        any id is missing.
+        Use when the user wants to compare specific units. Pass their ids.
+        Returns:
+            - `listings`: full details of the compared units.
+            - `fields`: key comparison attribute names.
+            - `context`: `{same_project, same_province, projects, provinces}` context evaluation.
+            - `deltas`: computed price, unit price, and area differences.
+            - `highlights`: map of listing_id -> badges (e.g. "cheapest_price", "largest_area").
+        Raises:
+            ToolError if fewer than 2 or more than 4 distinct listing ids are passed,
+            or if any specified listing id does not exist.
         """
         ids = list(dict.fromkeys(listing_ids))  # dedupe, keep order
         if not 2 <= len(ids) <= 4:
@@ -281,6 +288,7 @@ def register(mcp: FastMCP) -> None:
         if missing:
             raise ToolError(f"Listing id(s) not found: {', '.join(missing)}.")
         ordered = sorted(rows, key=lambda r: ids.index(r["id"]))
+        insights = compute_comparison_insights(ordered)
         return {
             "listings": ordered,
             "fields": [
@@ -288,11 +296,40 @@ def register(mcp: FastMCP) -> None:
                 "price_per_m2_vnd",
                 "area_m2",
                 "bedrooms",
+                "bedrooms_plus",
                 "bathrooms",
+                "floor_num",
+                "floor_band",
                 "property_type",
                 "direction_balcony",
                 "view",
                 "legal_status",
                 "furnishing",
+                "usage_status",
             ],
+            "context": insights["context"],
+            "deltas": insights["deltas"],
+            "highlights": insights["highlights"],
         }
+
+    @mcp.tool
+    def get_listings_geo_bounds(listing_ids: list[str]) -> dict:
+        """Calculate center coordinates, bounding box, recommended map zoom level, and distance matrix for a list of property IDs.
+
+        Use when preparing data for map rendering or analyzing spatial distances between compared properties.
+        Args:
+            listing_ids: list of listing IDs to calculate geo bounds for.
+        Returns:
+            dict containing scope, items, center, bounds, recommended_zoom, and distance_matrix.
+        """
+        return svc.get_listings_geo_bounds(listing_ids)
+
+    @mcp.tool
+    def compare_nearby_amenities(listing_ids: list[str]) -> dict:
+        """Fetch objective side-by-side nearby amenity distances (schools, hospitals, malls, parks) for compared properties.
+
+        Use when comparing location advantages or nearby infrastructure across properties.
+        IMPORTANT: The returned data is strictly descriptive (distances in meters). AI Agent MUST NOT provide buy/sell advice or claim one property is better than another.
+        """
+        return svc.compare_nearby_amenities(listing_ids)
+
