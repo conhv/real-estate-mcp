@@ -543,8 +543,8 @@ async def test_get_listing_returns_every_documented_field(mcp_server, sample_lis
         "get_listing", {"listing_id": sample_listing_ids[0]}
     ))
     expected = {
-        "id", "title", "url", "source", "project_id", "building_id", "property_type",
-        "area_m2", "bedrooms", "has_flex_room", "bathrooms", "price_vnd", "price_per_m2_vnd",
+        "id", "title", "url", "source", "project_id", "cluster_id", "building_id", "property_type",
+        "area_m2", "bedrooms", "bedrooms_plus", "has_flex_room", "bathrooms", "price_vnd", "price_per_m2_vnd",
         "status",
         "lat", "lng", "thumbnail", "floor_num", "floor_band", "direction_balcony", "view",
         "legal_status", "furnishing", "usage_status", "price_type", "area_type",
@@ -703,6 +703,11 @@ async def test_project_overview_stats(mcp_server, sample_project_id):
     assert out["project"]["id"] == sample_project_id
     assert out["stats"]["count"] > 0
     assert "price_vnd" in out["stats"]
+    assert "by_price_type" in out["stats"]
+    assert "coverage" in out["stats"]
+    assert out["stats"]["coverage"]["total"] == out["stats"]["count"]
+    assert out["stats"]["coverage"]["price_vnd_count"] <= out["stats"]["count"]
+    assert set(out["stats"]["by_price_type"]).issubset({"asking", "estimate", "unknown"})
 
 
 @needs_db
