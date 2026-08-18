@@ -703,6 +703,11 @@ async def test_project_overview_stats(mcp_server, sample_project_id):
     assert out["project"]["id"] == sample_project_id
     assert out["stats"]["count"] > 0
     assert "price_vnd" in out["stats"]
+    assert "by_price_type" in out["stats"]
+    assert "coverage" in out["stats"]
+    assert out["stats"]["coverage"]["total"] == out["stats"]["count"]
+    assert out["stats"]["coverage"]["price_vnd_count"] <= out["stats"]["count"]
+    assert set(out["stats"]["by_price_type"]).issubset({"asking", "estimate", "unknown"})
 
 
 @needs_db

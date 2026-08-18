@@ -246,13 +246,18 @@ def get_many(listing_ids: list[str]) -> list[dict]:
 def project_price_stats(project_id: str) -> dict:
     """Aggregate price/area stats for one project (computed in Python over the project's rows).
 
+    Top-level price stats intentionally keep the original US4 contract, but callers should prefer
+    `by_price_type` when speaking to users: `asking` is a seller's asking price, while `estimate`
+    is a source-computed reference price. `coverage` tells the agent how many rows each aggregate
+    is actually based on, because NULL values are omitted from min/max/avg calculations.
+
     TODO(student, phase 2): move this to a Postgres RPC (avg/percentile over price_vnd) so we
     don't pull every row; keeps latency within the PRD's <3s budget at scale.
     """
     rows = (
         get_client()
         .table(LISTINGS)
-        .select("price_vnd,price_per_m2_vnd,area_m2,property_type,bedrooms_norm")
+        .select("price_vnd,price_per_m2_vnd,price_type,area_m2,property_type,bedrooms_norm")
         .eq("project_id", project_id)
         .execute()
         .data
@@ -272,26 +277,51 @@ def project_price_stats(project_id: str) -> dict:
     def _avg(xs: list[int | float]) -> float | None:
         return round(sum(xs) / len(xs), 2) if xs else None
 
+    def _money_stats(xs: list[int]) -> dict:
+        return {
+            "min": min(xs) if xs else None,
+            "max": max(xs) if xs else None,
+            "avg": round(_avg(xs)) if xs and _avg(xs) is not None else None,
+        }
+
+    def _number_stats(xs: list[int | float]) -> dict:
+        return {
+            "min": min(xs) if xs else None,
+            "max": max(xs) if xs else None,
+            "avg": _avg(xs),
+        }
+
+    by_price_type: dict[str, dict] = {}
+    for price_type in sorted({r.get("price_type") or "unknown" for r in rows}):
+        subset = [r for r in rows if (r.get("price_type") or "unknown") == price_type]
+        subset_prices = [r["price_vnd"] for r in subset if r.get("price_vnd") is not None]
+        subset_ppm2 = [r["price_per_m2_vnd"] for r in subset if r.get("price_per_m2_vnd") is not None]
+        by_price_type[price_type] = {
+            "count": len(subset),
+            "price_vnd": _money_stats(subset_prices),
+            "price_per_m2_vnd": _money_stats(subset_ppm2),
+            "coverage": {
+                "price_vnd_count": len(subset_prices),
+                "price_per_m2_vnd_count": len(subset_ppm2),
+            },
+        }
+
     return {
         "project_id": project_id,
         "count": len(rows),
-        "price_vnd": {
-            "min": min(prices) if prices else None,
-            "max": max(prices) if prices else None,
-            "avg": round(_avg(prices)) if prices and _avg(prices) is not None else None,
-        },
-        "price_per_m2_vnd": {
-            "min": min(ppm2) if ppm2 else None,
-            "max": max(ppm2) if ppm2 else None,
-            "avg": round(_avg(ppm2)) if ppm2 and _avg(ppm2) is not None else None,
-        },
-        "area_m2": {
-            "min": min(areas) if areas else None,
-            "max": max(areas) if areas else None,
-            "avg": _avg(areas),
-        },
+        "price_vnd": _money_stats(prices),
+        "price_per_m2_vnd": _money_stats(ppm2),
+        "area_m2": _number_stats(areas),
         "bedrooms_range": {"min": min(beds) if beds else None, "max": max(beds) if beds else None},
         "by_property_type": ptypes,
+        "by_price_type": by_price_type,
+        "coverage": {
+            "total": len(rows),
+            "price_vnd_count": len(prices),
+            "price_per_m2_vnd_count": len(ppm2),
+            "area_m2_count": len(areas),
+            "bedrooms_count": len(beds),
+        },
     }
 
 

@@ -15,10 +15,15 @@ def register(mcp: FastMCP) -> None:
     def project_overview(project_id: str) -> dict:
         """Market overview for one project (US4): counts + price/area stats + property-type mix.
 
-        Use when the user asks to analyze or summarize a project ("phân tích tổng quan").
+        Use when the user asks to analyze or summarize a project ("phan tich tong quan").
         Returns {project, stats:{count, price_vnd:{min,max,avg}, price_per_m2_vnd:{...},
-        bedrooms_range, by_property_type}}. Descriptive stats only — NOT valuation or investment
-        advice (those are out of scope per the PRD). Raises if the project id is unknown.
+        bedrooms_range, by_property_type, by_price_type, coverage}}.
+
+        Descriptive stats only: NOT valuation or investment advice (out of scope per the PRD).
+        Top-level price stats mix all listing price kinds, so prefer stats.by_price_type when
+        wording a user answer: "asking" means seller asking price, while "estimate" means a
+        source-computed reference price. coverage says how many rows each aggregate used, because
+        NULL values are skipped. Raises if the project id is unknown.
         """
         project = loc_svc.get_location(project_id)
         if project is None or project.get("level") != "project":
@@ -40,7 +45,7 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Geo points for the map view (US5): listings with lat/lng, and optionally surrounding amenities.
 
-        Use for "xem bản đồ". Optionally scope to one project. 
+        Use for "xem ban do". Optionally scope to one project.
         Set include_amenities=True ONLY when the user explicitly asks for amenities or POIs nearby.
         Returns {"count": n, "points": [{id, title, property_type, price_vnd, lat, lng}], "amenities": [...]}.
         """
@@ -56,18 +61,16 @@ def register(mcp: FastMCP) -> None:
             max_bedrooms=max_bedrooms
         )
         res = {"count": len(points), "points": points}
-        
+
         if include_amenities and points:
-            # Calculate simple centroid
             center_lat = sum(p["lat"] for p in points) / len(points)
             center_lng = sum(p["lng"] for p in points) / len(points)
             res["amenities"] = osm_svc.get_nearby_amenities(center_lat, center_lng, radius=1000)
         elif include_amenities and project_id:
-            # Fallback to project coordinates if no listing points
             proj = loc_svc.get_location(project_id)
             if proj and proj.get("lat") and proj.get("lng"):
                 res["amenities"] = osm_svc.get_nearby_amenities(proj["lat"], proj["lng"], radius=1000)
             else:
                 res["amenities"] = []
-                
+
         return res
