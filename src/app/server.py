@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from . import config
 from .tools import register_all
@@ -24,6 +26,18 @@ mcp = FastMCP(
 )
 
 register_all(mcp)
+
+
+@mcp.custom_route("/healthz", methods=["GET"])
+async def healthz(request: Request) -> JSONResponse:
+    """Unauthenticated liveness probe for the hosting platform.
+
+    /mcp cannot serve this purpose: it answers 401 without a token, which a
+    platform health check reads as a failing service. On a scale-to-zero plan
+    the probe is also what keeps the server awake — without it the first tool
+    call an agent makes lands on a cold start and fails rather than waits.
+    """
+    return JSONResponse({"status": "ok"})
 
 
 def main() -> None:
