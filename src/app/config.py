@@ -42,3 +42,10 @@ def host() -> str:
 
 def port() -> int:
     return int(os.environ.get("MCP_PORT", "8000"))
+
+
+def auth_token() -> str | None:
+    """Shared secret required on HTTP transport. Unset = no auth (stdio, or a
+    trusted private network). Public HTTP deployments MUST set this: the tools
+    read Supabase with the service-role key, which bypasses RLS."""
+    return os.environ.get("MCP_AUTH_TOKEN") or None
