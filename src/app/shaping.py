@@ -21,7 +21,7 @@ from typing import Any
 # are titled "Studio" and 126 more are shophouses carrying a placeholder 1.
 LISTING_CARD_COLUMNS = (
     "id,title,url,source,project_id,building_id,property_type,area_m2,"
-    "bedrooms_norm,has_flex_room,bathrooms,"
+    "bedrooms_norm,bedrooms_plus,has_flex_room,bathrooms,"
     "price_vnd,price_per_m2_vnd,price_type,status,lat,lng,thumbnail"
 )
 
@@ -82,10 +82,9 @@ def shape_listing_card(row: dict[str, Any]) -> dict[str, Any]:
         "building_id": row.get("building_id"),
         "property_type": row.get("property_type"),
         "area_m2": to_float(row.get("area_m2")),
-        # Derived in SQL from the listing title — see LISTING_CARD_COLUMNS above. None means the
-        # title did not say, which is mostly shophouses and townhouses.
         "bedrooms": to_int(row.get("bedrooms_norm")),
-        "has_flex_room": row.get("has_flex_room"),
+        "bedrooms_plus": bool(row.get("bedrooms_plus")),
+        "has_flex_room": bool(row.get("bedrooms_plus") or row.get("has_flex_room")),
         "bathrooms": to_int(row.get("bathrooms")),
         "price_vnd": row.get("price_vnd"),
         "price_per_m2_vnd": row.get("price_per_m2_vnd"),
