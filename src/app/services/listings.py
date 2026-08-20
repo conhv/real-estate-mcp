@@ -239,15 +239,18 @@ def get_many(listing_ids: list[str]) -> list[dict]:
         loc_rows = (
             get_client()
             .table("locations")
-            .select("id,province")
+            .select("id,name,province")
             .in_("id", project_ids)
             .execute()
             .data
             or []
         )
         prov_map = {l["id"]: l.get("province") for l in loc_rows}
+        name_map = {l["id"]: l.get("name") for l in loc_rows}
         for item in shaped:
             item["province"] = prov_map.get(item.get("project_id"))
+            if name_map.get(item.get("project_id")):
+                item["project_name"] = name_map.get(item.get("project_id"))
     return shaped
 
 
