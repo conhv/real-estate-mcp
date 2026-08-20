@@ -165,6 +165,7 @@ class TestProjectPriceStats:
                 "area_m2": "60.0",
                 "property_type": "can_ho",
                 "bedrooms_norm": "2",
+                "price_type": "asking",
             },
             {
                 "price_vnd": 5_000_000_000,
@@ -172,6 +173,15 @@ class TestProjectPriceStats:
                 "area_m2": "80.0",
                 "property_type": "can_ho",
                 "bedrooms_norm": "3",
+                "price_type": "estimate",
+            },
+            {
+                "price_vnd": None,
+                "price_per_m2_vnd": None,
+                "area_m2": None,
+                "property_type": "shophouse",
+                "bedrooms_norm": None,
+                "price_type": "asking",
             },
         ]
         with patch("app.services.listings.get_client") as mock_db:
@@ -180,10 +190,31 @@ class TestProjectPriceStats:
             mock_table.select.return_value.eq.return_value.execute.return_value.data = mock_rows
 
             stats = listing_svc.project_price_stats("oh:amber-riverside")
-            assert stats["count"] == 2
+            assert stats["count"] == 3
             assert stats["price_vnd"] == {"min": 3_000_000_000, "max": 5_000_000_000, "avg": 4_000_000_000}
             assert stats["price_per_m2_vnd"] == {"min": 50_000_000, "max": 62_500_000, "avg": 56_250_000}
             assert stats["area_m2"] == {"min": 60.0, "max": 80.0, "avg": 70.0}
             assert stats["bedrooms_range"] == {"min": 2, "max": 3}
-            assert stats["by_property_type"] == {"can_ho": 2}
+            assert stats["by_property_type"] == {"can_ho": 2, "shophouse": 1}
+            assert stats["coverage"] == {
+                "total": 3,
+                "price_vnd_count": 2,
+                "price_per_m2_vnd_count": 2,
+                "area_m2_count": 2,
+                "bedrooms_count": 2,
+            }
+            assert stats["by_price_type"] == {
+                "asking": {
+                    "count": 2,
+                    "price_vnd": {"min": 3_000_000_000, "max": 3_000_000_000, "avg": 3_000_000_000},
+                    "price_per_m2_vnd": {"min": 50_000_000, "max": 50_000_000, "avg": 50_000_000},
+                    "coverage": {"price_vnd_count": 1, "price_per_m2_vnd_count": 1},
+                },
+                "estimate": {
+                    "count": 1,
+                    "price_vnd": {"min": 5_000_000_000, "max": 5_000_000_000, "avg": 5_000_000_000},
+                    "price_per_m2_vnd": {"min": 62_500_000, "max": 62_500_000, "avg": 62_500_000},
+                    "coverage": {"price_vnd_count": 1, "price_per_m2_vnd_count": 1},
+                },
+            }
 
