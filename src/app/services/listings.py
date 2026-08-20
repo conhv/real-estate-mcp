@@ -103,7 +103,39 @@ def search_listings(
         q = q.lte("price_vnd", max_price_vnd)
     # `id` breaks price ties so repeating a search returns the same cards (see list_by_project).
     rows = q.order("price_vnd", desc=False).order("id", desc=False).limit(limit).execute().data
-    return [shape_listing_card(r) for r in rows or []]
+    cards = [shape_listing_card(r) for r in rows or []]
+    return _enrich_location_info(cards)
+
+
+def _enrich_location_info(items: list[dict]) -> list[dict]:
+    """Attach project name, province, and district to shaped listing dicts."""
+    project_ids = list({r["project_id"] for r in items if r.get("project_id")})
+    if not project_ids:
+        return items
+    try:
+        loc_rows = (
+            get_client()
+            .table("locations")
+            .select("id,name,province,district")
+            .in_("id", project_ids)
+            .execute()
+            .data
+            or []
+        )
+        loc_map = {l["id"]: l for l in loc_rows}
+        for item in items:
+            loc = loc_map.get(item.get("project_id"))
+            if loc:
+                item["province"] = loc.get("province")
+                item["district"] = loc.get("district")
+                item["project_name"] = loc.get("name")
+                parts = [loc.get("district"), loc.get("province")]
+                addr_parts = [p for p in parts if p]
+                if addr_parts:
+                    item["address"] = ", ".join(addr_parts)
+    except Exception:
+        pass
+    return items
 
 
 def get_listing(listing_id: str) -> dict | None:
@@ -116,7 +148,10 @@ def get_listing(listing_id: str) -> dict | None:
         .execute()
         .data
     )
-    return shape_listing_detail(rows[0]) if rows else None
+    if not rows:
+        return None
+    detail = shape_listing_detail(rows[0])
+    return _enrich_location_info([detail])[0]
 
 
 def list_by_project(project_id: str, limit: int, offset: int) -> dict:
@@ -145,6 +180,7 @@ def list_by_project(project_id: str, limit: int, offset: int) -> dict:
             "listings": [],
         }
     listings = [shape_listing_card(r) for r in res.data or []]
+    listings = _enrich_location_info(listings)
     return {
         "total": res.count,
         "offset": offset,
@@ -234,24 +270,7 @@ def get_many(listing_ids: list[str]) -> list[dict]:
     shaped = [shape_listing_detail(r) for r in rows]
     # Sort shaped listings by price_vnd ascending
     shaped.sort(key=lambda x: (x.get("price_vnd") or 0))
-    project_ids = list({r["project_id"] for r in shaped if r.get("project_id")})
-    if project_ids:
-        loc_rows = (
-            get_client()
-            .table("locations")
-            .select("id,name,province")
-            .in_("id", project_ids)
-            .execute()
-            .data
-            or []
-        )
-        prov_map = {l["id"]: l.get("province") for l in loc_rows}
-        name_map = {l["id"]: l.get("name") for l in loc_rows}
-        for item in shaped:
-            item["province"] = prov_map.get(item.get("project_id"))
-            if name_map.get(item.get("project_id")):
-                item["project_name"] = name_map.get(item.get("project_id"))
-    return shaped
+    return _enrich_location_info(shaped)
 
 
 
